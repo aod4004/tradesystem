@@ -18,3 +18,5 @@ dist/
 
 # Claude Code 내부 파일
 .claude/
+
+API Key/
