@@ -1,0 +1,74 @@
+export interface ScreenedStock {
+  code: string
+  name: string
+  market: string
+  current_price: number
+  high_1y: number
+  low_1y: number
+  drop_from_high: number      // 고점 대비 하락률 (%)
+  rise_from_low: number       // 저점 대비 상승 배수
+  market_cap: number
+  net_income: number          // 순이익 (억원)
+  operating_income: number    // 영업이익 (억원)
+  foreign_ratio: number       // 외국인 비율 (%)
+  screened_at: string
+}
+
+export interface Position {
+  id: number
+  stock_code: string
+  stock_name: string
+  quantity: number
+  avg_buy_price: number
+  buy_rounds_done: number
+  sell_rounds_done: number
+  status: string
+  current_price?: number      // 실시간 주입
+  eval_profit_loss?: number   // 평가 손익
+  profit_rate?: number        // 수익률 %
+}
+
+export interface PendingSignal {
+  stock_code: string
+  trigger_round: number
+  target_order_price: number
+  signal_date: string
+  is_executed: boolean
+}
+
+export interface OrderRecord {
+  id: number
+  stock_code: string
+  stock_name: string
+  order_type: 'buy' | 'sell'
+  order_round: number
+  order_price: number
+  order_qty: number
+  filled_price: number | null
+  filled_qty: number
+  status: string
+  created_at: string
+}
+
+export interface AccountBalance {
+  total_investment: number
+  total_eval_amount: number
+  deposit: number
+  profit_rate: number
+  holdings: Holding[]
+}
+
+export interface Holding {
+  code: string
+  name: string
+  quantity: number
+  avg_price: number
+  current_price: number
+  eval_profit_loss: number
+  profit_rate: number
+}
+
+export interface WsMessage {
+  type: 'price_update' | 'sell_signal' | 'order_filled' | 'extra_buy_signal'
+  data: Record<string, unknown>
+}
