@@ -14,12 +14,31 @@ Phase 2.5 부터:
  - 유저 키는 `get_or_create_user_client(user_id, cfg)` — 레지스트리에 캐시되어 scheduler/WS/executor 가 공유.
  - 레지스트리 정리: `invalidate_user_client` (키 변경/삭제), `close_all_user_clients` (서버 종료).
 """
+import asyncio
 import hashlib
 from datetime import datetime
 from typing import Any, TYPE_CHECKING
 import httpx
 import redis.asyncio as aioredis
 from app.config import settings
+
+
+# ---------------------------------------------------------------------- #
+#  app_key 별 동시 요청 상한 — 키움 rate limit 공유 버킷 보호
+# ---------------------------------------------------------------------- #
+# 스크리너(시스템 키) 와 UI 호출(유저 키, admin 은 시스템 키와 동일)이 같은 app_key
+# 를 쓰면 rate limit 을 공유한다. 이 세마포어로 app_key 별 총 동시 요청을 제한해
+# 스크리닝 중에도 UI 호출이 429 없이 대기 후 처리되도록 한다.
+_PER_KEY_CONCURRENCY = 5
+_app_key_semaphores: dict[str, asyncio.Semaphore] = {}
+
+
+def _get_request_semaphore(app_key: str) -> asyncio.Semaphore:
+    sem = _app_key_semaphores.get(app_key)
+    if sem is None:
+        sem = asyncio.Semaphore(_PER_KEY_CONCURRENCY)
+        _app_key_semaphores[app_key] = sem
+    return sem
 
 if TYPE_CHECKING:
     from app.db.models import UserTradingConfig
@@ -191,7 +210,9 @@ class KiwoomClient:
             "cont-yn": cont_yn,
             "next-key": next_key,
         }
-        resp = await self._http.post(url, headers=headers, json=body)
+        # app_key 별 동시 요청 상한 내에서만 실제 호출
+        async with _get_request_semaphore(self._app_key):
+            resp = await self._http.post(url, headers=headers, json=body)
         resp.raise_for_status()
         data = resp.json()
         if data.get("return_code", 0) != 0:
