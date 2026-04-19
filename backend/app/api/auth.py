@@ -1,11 +1,11 @@
 """
-인증 엔드포인트 — 회원가입 / 로그인 / 현재 사용자 조회
+인증 엔드포인트 — 회원가입 / 로그인 / 현재 사용자 조회 / 탈퇴
 """
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, EmailStr, Field
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth import (
@@ -15,7 +15,9 @@ from app.auth import (
     verify_password,
 )
 from app.db.database import get_db
-from app.db.models import User
+from app.db.models import (
+    BuySignal, Order, Position, User, UserTradingConfig,
+)
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -78,3 +80,34 @@ async def login(req: LoginRequest, db: Annotated[AsyncSession, Depends(get_db)])
 @router.get("/me", response_model=UserResponse)
 async def me(current: Annotated[User, Depends(get_current_user)]):
     return UserResponse(id=current.id, email=current.email, is_admin=current.is_admin)
+
+
+class DeleteAccountRequest(BaseModel):
+    password: str
+
+
+@router.delete("/me")
+async def delete_me(
+    req: DeleteAccountRequest,
+    current: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """회원 탈퇴 — 비밀번호 재확인 후 해당 유저와 관련 데이터 모두 삭제.
+
+    관련 데이터: orders, buy_signals, positions, user_trading_config.
+    키움 계좌의 실제 자산은 건드리지 않는다 (시스템 데이터만 정리).
+    """
+    if not verify_password(req.password, current.password_hash):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid password",
+        )
+
+    await db.execute(delete(Order).where(Order.user_id == current.id))
+    await db.execute(delete(BuySignal).where(BuySignal.user_id == current.id))
+    await db.execute(delete(Position).where(Position.user_id == current.id))
+    await db.execute(
+        delete(UserTradingConfig).where(UserTradingConfig.user_id == current.id)
+    )
+    await db.execute(delete(User).where(User.id == current.id))
+    await db.commit()
+    return {"deleted": True}

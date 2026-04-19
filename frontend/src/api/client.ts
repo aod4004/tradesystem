@@ -37,3 +37,24 @@ export const runScreening = () => api.post('/orders/run-screening').then(r => r.
 export const placeManualOrder = (body: {
   stock_code: string; order_type: string; quantity: number; price: number
 }) => api.post('/orders/manual', body).then(r => r.data)
+
+// 설정
+export interface KiwoomKeysStatus {
+  has_keys: boolean
+  mock: boolean
+  total_investment: number
+}
+
+export const fetchKiwoomStatus = () =>
+  api.get<KiwoomKeysStatus>('/settings/kiwoom-keys').then(r => r.data)
+
+export const saveKiwoomKeys = (body: {
+  app_key: string; secret_key: string; mock: boolean; total_investment?: number
+}) => api.put<KiwoomKeysStatus>('/settings/kiwoom-keys', body).then(r => r.data)
+
+export const deleteKiwoomKeys = () =>
+  api.delete<KiwoomKeysStatus>('/settings/kiwoom-keys').then(r => r.data)
+
+// 회원 탈퇴
+export const deleteAccount = (password: string) =>
+  api.delete('/auth/me', { data: { password } }).then(r => r.data)

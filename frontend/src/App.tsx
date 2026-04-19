@@ -1,12 +1,13 @@
 import { useState, ReactNode } from 'react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
+import { BrowserRouter, Link, Navigate, Route, Routes } from 'react-router-dom'
 import AccountSummary from './components/AccountSummary'
 import ScreeningTable from './components/ScreeningTable'
 import PortfolioTable from './components/PortfolioTable'
 import OrderList from './components/OrderList'
 import Login from './pages/Login'
 import Signup from './pages/Signup'
+import Settings from './pages/Settings'
 import { AuthProvider, useAuth } from './context/AuthContext'
 import { runScreening } from './api/client'
 
@@ -50,6 +51,7 @@ function Dashboard() {
           </button>
           <div className="flex items-center gap-2 text-xs text-gray-400">
             <span>{user?.email}</span>
+            <Link to="/settings" className="text-gray-300 hover:text-white underline">설정</Link>
             <button onClick={logout} className="text-gray-300 hover:text-white underline">로그아웃</button>
           </div>
         </div>
@@ -102,6 +104,7 @@ export default function App() {
           <Routes>
             <Route path="/login" element={<Login />} />
             <Route path="/signup" element={<Signup />} />
+            <Route path="/settings" element={<Protected><Settings /></Protected>} />
             <Route path="/" element={<Protected><Dashboard /></Protected>} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>

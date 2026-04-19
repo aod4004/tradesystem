@@ -10,7 +10,7 @@ from app.auth import authenticate_websocket, hash_password
 from app.config import settings
 from app.db.database import AsyncSessionLocal
 from app.db.models import User, UserTradingConfig
-from app.api import auth as auth_api, dashboard, account, orders
+from app.api import auth as auth_api, dashboard, account, orders, settings as settings_api
 from app.scheduler.jobs import create_scheduler
 from app.strategy.ma20 import refresh_ma20_for_active_positions
 from app.ws.manager import manager
@@ -83,6 +83,7 @@ app.include_router(auth_api.router)
 app.include_router(dashboard.router)
 app.include_router(account.router)
 app.include_router(orders.router)
+app.include_router(settings_api.router)
 
 
 @app.websocket("/ws/realtime")

@@ -8,12 +8,19 @@
 - appkey/secretkey는 토큰 발급 시에만 사용
 - 계좌번호는 토큰에 귀속 — 주문/조회 body에 전달하지 않음
 - HashKey 불필요
+
+Phase 2 에서는 `get_kiwoom_client()` 싱글턴(env 기반)을 스케줄러/WS 가 그대로 쓰고,
+유저별 키가 필요한 엔드포인트(예: 계좌 잔고)는 `make_user_client()` 로 per-user 인스턴스 생성.
 """
+import hashlib
 from datetime import datetime
-from typing import Any
+from typing import Any, TYPE_CHECKING
 import httpx
 import redis.asyncio as aioredis
 from app.config import settings
+
+if TYPE_CHECKING:
+    from app.db.models import UserTradingConfig
 
 
 class TrId:
@@ -81,9 +88,31 @@ def to_float(value: Any) -> float:
 
 
 class KiwoomClient:
-    def __init__(self):
+    def __init__(
+        self,
+        app_key: str | None = None,
+        secret_key: str | None = None,
+        mock: bool | None = None,
+    ):
+        self._app_key = app_key if app_key is not None else settings.KIWOOM_APP_KEY
+        self._secret_key = secret_key if secret_key is not None else settings.KIWOOM_SECRET_KEY
+        self._mock = mock if mock is not None else settings.KIWOOM_MOCK
         self._http = httpx.AsyncClient(timeout=30)
         self._redis: aioredis.Redis | None = None
+
+    @property
+    def base_url(self) -> str:
+        return "https://mockapi.kiwoom.com" if self._mock else "https://api.kiwoom.com"
+
+    @property
+    def ws_url(self) -> str:
+        host = "mockapi.kiwoom.com" if self._mock else "api.kiwoom.com"
+        return f"wss://{host}:10000/api/dostk/websocket"
+
+    def _token_cache_key(self) -> str:
+        """app_key 별로 토큰 캐시를 분리 — 유저별 키 교차오염 방지."""
+        digest = hashlib.sha256(self._app_key.encode()).hexdigest()[:12]
+        return f"kiwoom:access_token:{digest}"
 
     async def _get_redis(self) -> aioredis.Redis:
         if self._redis is None:
@@ -94,22 +123,26 @@ class KiwoomClient:
     #  인증 (au10001)
     # ------------------------------------------------------------------ #
     async def get_token(self) -> str:
+        if not self._app_key or not self._secret_key:
+            raise ValueError("키움 app_key/secret_key 가 설정되지 않았습니다")
+
         redis = await self._get_redis()
-        cached = await redis.get("kiwoom:access_token")
+        cache_key = self._token_cache_key()
+        cached = await redis.get(cache_key)
         if cached:
             return cached.decode()
 
         token, expires_dt = await self._issue_token()
         ttl = self._calc_ttl(expires_dt)
-        await redis.setex("kiwoom:access_token", ttl, token)
+        await redis.setex(cache_key, ttl, token)
         return token
 
     async def _issue_token(self) -> tuple[str, str]:
-        url = f"{settings.KIWOOM_BASE_URL}/oauth2/token"
+        url = f"{self.base_url}/oauth2/token"
         body = {
             "grant_type": "client_credentials",
-            "appkey": settings.KIWOOM_APP_KEY,
-            "secretkey": settings.KIWOOM_SECRET_KEY,
+            "appkey": self._app_key,
+            "secretkey": self._secret_key,
         }
         resp = await self._http.post(
             url,
@@ -148,7 +181,7 @@ class KiwoomClient:
             raise ValueError(f"알 수 없는 api_id: {api_id}")
 
         token = await self.get_token()
-        url = f"{settings.KIWOOM_BASE_URL}{path}"
+        url = f"{self.base_url}{path}"
         headers = {
             "Content-Type": "application/json;charset=UTF-8",
             "authorization": f"Bearer {token}",
@@ -293,7 +326,7 @@ class KiwoomClient:
             await self._redis.aclose()
 
 
-# 싱글턴
+# 환경변수 기반 싱글턴 — scheduler / WS / screener 등 글로벌 사용
 _client: KiwoomClient | None = None
 
 
@@ -302,3 +335,12 @@ def get_kiwoom_client() -> KiwoomClient:
     if _client is None:
         _client = KiwoomClient()
     return _client
+
+
+def make_user_client(cfg: "UserTradingConfig") -> KiwoomClient:
+    """유저별 설정으로 ephemeral 클라이언트 생성. 호출 후 close() 권장."""
+    return KiwoomClient(
+        app_key=cfg.kiwoom_app_key or "",
+        secret_key=cfg.kiwoom_secret_key or "",
+        mock=cfg.kiwoom_mock,
+    )

@@ -1,10 +1,11 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth import get_current_user
-from app.core.kiwoom_client import get_kiwoom_client, to_int, to_float
+from app.core.kiwoom_client import make_user_client, to_int, to_float
 from app.db.database import get_db
-from app.db.models import User
+from app.db.models import User, UserTradingConfig
 from app.db.user_config import get_total_investment
 
 router = APIRouter(prefix="/api/account", tags=["account"])
@@ -17,12 +18,31 @@ async def get_balance(
 ):
     """계좌평가잔고내역 (kt00018) + 예수금(kt00001) 통합.
 
-    주의: 현재는 단일 키움 계정을 공유하므로 계정 숫자는 모든 유저가 동일. 표시되는
-    '총 투자금' 만 유저별 설정을 반영. Phase 2.5 에서 계정도 유저별 분리 예정.
+    유저 본인의 키움 키로 조회. 키 미등록 시 409 반환 (프론트는 이를 보고 설정 UI 안내).
     """
-    client = get_kiwoom_client()
-    bal = await client.get_balance()
-    dep = await client.get_deposit()
+    cfg = (
+        await db.execute(
+            select(UserTradingConfig).where(UserTradingConfig.user_id == user.id)
+        )
+    ).scalar_one_or_none()
+    if cfg is None or not cfg.kiwoom_app_key or not cfg.kiwoom_secret_key:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="keys_not_configured",
+        )
+
+    client = make_user_client(cfg)
+    try:
+        bal = await client.get_balance()
+        dep = await client.get_deposit()
+    except Exception as e:
+        await client.close()
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"키움 API 오류: {e}",
+        )
+    else:
+        await client.close()
 
     holdings = [
         {
@@ -37,8 +57,8 @@ async def get_balance(
         for h in (bal.get("acnt_evlt_remn_indv_tot", []) or [])
     ]
 
-    total_eval = to_int(bal.get("tot_evlt_amt"))          # 보유 종목 평가금액
-    deposit = to_int(dep.get("entr"))                      # 예수금
+    total_eval = to_int(bal.get("tot_evlt_amt"))
+    deposit = to_int(dep.get("entr"))
     order_available = to_int(dep.get("ord_alow_amt"))
     total_asset = to_int(bal.get("prsm_dpst_aset_amt")) or (total_eval + deposit)
     total_invest = await get_total_investment(db, user.id)
@@ -58,6 +78,7 @@ async def get_balance(
         "order_available": order_available,
         "profit_rate": round(profit_rate, 2),
         "holdings": holdings,
+        "mock": cfg.kiwoom_mock,
     }
 
 
