@@ -20,7 +20,7 @@ from collections import Counter
 from datetime import datetime
 
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import update
+from sqlalchemy import delete
 
 from app.config import settings
 from app.core.kiwoom_client import get_kiwoom_client, to_int, to_float
@@ -45,8 +45,10 @@ async def run_screening(
     """
     client = get_kiwoom_client()
 
-    # 기존 스크리닝 종목 비활성화
-    await db.execute(update(ScreenedStock).values(is_active=False))
+    # 기존 스크리닝 종목 전량 삭제 후 새로 채움.
+    # positions/buy_signals 의 screened_stocks FK 는 0005 에서 드롭됐으므로 안전.
+    # is_active=False 로만 두면 같은 code 재스크리닝 시 unique 제약 충돌 (ix_screened_stocks_code).
+    await db.execute(delete(ScreenedStock))
     await db.commit()
 
     # 코스피(0) + 코스닥(10) 전체 종목
