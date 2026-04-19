@@ -7,7 +7,7 @@ export default function AccountSummary() {
 
   const cards = [
     { label: '총 투자금', value: data?.total_investment, color: 'text-gray-200' },
-    { label: '평가 금액', value: data?.total_eval_amount, color: 'text-blue-400' },
+    { label: '총 자산', value: data?.total_asset, color: 'text-blue-400' },
     { label: '예수금', value: data?.deposit, color: 'text-yellow-400' },
     {
       label: '수익률',

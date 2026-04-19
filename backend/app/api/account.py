@@ -26,17 +26,20 @@ async def get_balance():
         for h in (bal.get("acnt_evlt_remn_indv_tot", []) or [])
     ]
 
-    total_eval = to_int(bal.get("tot_evlt_amt"))
-    deposit = to_int(dep.get("entr"))
+    total_eval = to_int(bal.get("tot_evlt_amt"))          # 보유 종목 평가금액만
+    deposit = to_int(dep.get("entr"))                      # 예수금
     order_available = to_int(dep.get("ord_alow_amt"))
+    # 추정예탁자산 = 보유 평가금 + 예수금 + 대용금 등 (키움 내부 합산)
+    total_asset = to_int(bal.get("prsm_dpst_aset_amt")) or (total_eval + deposit)
     total_invest = settings.TOTAL_INVESTMENT
     profit_rate = (
-        (total_eval - total_invest) / total_invest * 100
+        (total_asset - total_invest) / total_invest * 100
         if total_invest else 0
     )
 
     return {
         "total_investment": total_invest,
+        "total_asset": total_asset,
         "total_eval_amount": total_eval,
         "total_purchase_amount": to_int(bal.get("tot_pur_amt")),
         "total_profit_loss": to_int(bal.get("tot_evlt_pl")),

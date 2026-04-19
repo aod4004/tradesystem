@@ -52,9 +52,14 @@ export interface OrderRecord {
 
 export interface AccountBalance {
   total_investment: number
-  total_eval_amount: number
+  total_asset: number               // 총자산 (평가금+예수금+대용금)
+  total_eval_amount: number         // 보유 종목 평가금액만
+  total_purchase_amount: number
+  total_profit_loss: number
+  total_profit_rate: number
   deposit: number
-  profit_rate: number
+  order_available: number
+  profit_rate: number               // 총자산 기준
   holdings: Holding[]
 }
 
