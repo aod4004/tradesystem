@@ -14,7 +14,7 @@ from app.db.user_config import (
 )
 from app.core.kiwoom_client import get_or_create_user_client
 from app.strategy.executor import calc_buy_qty
-from app.strategy.guards import check_buy_guards
+from app.strategy.guards import check_buy_guards, notify_guard_block
 from app.strategy.screener import run_screening
 from app.strategy.signal import detect_buy_signals
 
@@ -52,6 +52,10 @@ async def manual_order(
             price=req.price, qty=req.quantity, client=client,
         )
         if deny is not None:
+            notify_guard_block(
+                user.id, req.stock_code, req.stock_code,
+                f"수동 {req.quantity}주 @ {req.price:,}원", deny,
+            )
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail={"code": f"guard_{deny.reason_code}", "message": deny.message},

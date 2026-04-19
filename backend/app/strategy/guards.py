@@ -22,6 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.core.kiwoom_client import KiwoomClient, to_int
+from app.core.notifier import notify_user_fire
 from app.db.models import (
     Order, OrderStatus, OrderType,
     Position, PositionStatus,
@@ -38,6 +39,22 @@ _UTC = ZoneInfo("UTC")
 class GuardDenied:
     reason_code: str   # 'position_ratio' | 'daily_count' | 'daily_amount' | 'insufficient_cash'
     message: str       # 유저에게 보낼 한국어 사유
+
+
+def notify_guard_block(
+    user_id: int, stock_name: str, stock_code: str, detail: str, deny: "GuardDenied",
+) -> None:
+    """리스크 가드로 주문이 차단됐을 때 유저에게 카카오톡 알림.
+
+    dedup 은 (사유 × 종목 × 날짜) — notifier 내부 TTL 60s 내엔 중복 차단,
+    날짜가 바뀌면 새 키라 다시 전송된다.
+    """
+    today = datetime.utcnow().strftime("%Y-%m-%d")
+    notify_user_fire(
+        user_id,
+        f"🛑 매수 주문 차단 (리스크 가드)\n{stock_name} ({stock_code})\n{detail}\n사유: {deny.message}",
+        dedup_key=f"guard:{deny.reason_code}:{stock_code}:{today}",
+    )
 
 
 def _today_kst_range_utc() -> tuple[datetime, datetime]:

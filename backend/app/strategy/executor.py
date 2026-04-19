@@ -18,7 +18,7 @@ from app.db.models import (
     OrderType, OrderStatus,
 )
 from app.db.user_config import get_total_investment, get_trading_config
-from app.strategy.guards import check_buy_guards, GuardDenied
+from app.strategy.guards import check_buy_guards, notify_guard_block
 
 
 async def execute_pending_buy_orders(
@@ -64,7 +64,7 @@ async def execute_pending_buy_orders(
             )
             if deny is not None:
                 print(f"[executor] 🛑 {sig.stock_code} {sig.trigger_round}차 매수 차단 — {deny.reason_code}: {deny.message}")
-                _notify_guard_block(
+                notify_guard_block(
                     user_id, sig.stock_name or sig.stock_code, sig.stock_code,
                     f"{sig.trigger_round}차 {qty}주 @ {sig.target_order_price:,}원",
                     deny,
@@ -228,7 +228,7 @@ async def execute_extra_buy_order(
     )
     if deny is not None:
         print(f"[executor] 🛑 추가매수 차단 {position.stock_code} — {deny.reason_code}: {deny.message}")
-        _notify_guard_block(
+        notify_guard_block(
             position.user_id, position.stock_name, position.stock_code,
             f"추가매수 {qty}주 @ {current_price:,}원", deny,
         )
@@ -313,14 +313,3 @@ def calc_buy_qty(price: int, total_investment: float) -> int:
     return int(buy_amount // price)
 
 
-def _notify_guard_block(
-    user_id: int, stock_name: str, stock_code: str, detail: str, deny: GuardDenied,
-) -> None:
-    """리스크 가드로 주문이 차단됐을 때 유저에게 알림 — dedup 은 사유×종목×날짜."""
-    from datetime import datetime as _dt
-    today = _dt.utcnow().strftime("%Y-%m-%d")
-    notify_user_fire(
-        user_id,
-        f"🛑 매수 주문 차단 (리스크 가드)\n{stock_name} ({stock_code})\n{detail}\n사유: {deny.message}",
-        dedup_key=f"guard:{deny.reason_code}:{stock_code}:{today}",
-    )
