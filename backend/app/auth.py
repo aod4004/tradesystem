@@ -7,10 +7,10 @@ WebSocket은 `?token=<jwt>` 쿼리 파라미터로 인증.
 from datetime import datetime, timedelta, timezone
 from typing import Annotated
 
+import bcrypt
 import jwt
 from fastapi import Depends, HTTPException, Query, WebSocket, WebSocketException, status
 from fastapi.security import OAuth2PasswordBearer
-from passlib.context import CryptContext
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -19,17 +19,23 @@ from app.db.database import get_db
 from app.db.models import User
 
 
-_pwd = CryptContext(schemes=["bcrypt"], deprecated="auto")
 _oauth2 = OAuth2PasswordBearer(tokenUrl="/api/auth/login", auto_error=False)
+
+# bcrypt 는 72 바이트 초과 입력을 거부하므로 방어적으로 자른다
+_BCRYPT_MAX = 72
+
+
+def _enc(plain: str) -> bytes:
+    return plain.encode("utf-8")[:_BCRYPT_MAX]
 
 
 def hash_password(plain: str) -> str:
-    return _pwd.hash(plain)
+    return bcrypt.hashpw(_enc(plain), bcrypt.gensalt(rounds=12)).decode("utf-8")
 
 
 def verify_password(plain: str, hashed: str) -> bool:
     try:
-        return _pwd.verify(plain, hashed)
+        return bcrypt.checkpw(_enc(plain), hashed.encode("utf-8"))
     except Exception:
         return False
 
