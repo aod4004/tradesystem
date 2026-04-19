@@ -1,10 +1,11 @@
-"""baseline — 기존 스키마 캡처 (create_all 사용)
+"""baseline — Phase 1 시점의 스키마 캡처
 
-이 migration 은 init_db() 와 동일한 create_all 을 그대로 실행한다.
-- 빈 DB: 전체 테이블 생성 (이전 init_db 와 동일 결과)
-- 기존 DB: create_all 은 존재하는 테이블을 건드리지 않으므로 no-op → 안전 채택
+Base.metadata.create_all 을 그대로 쓰면 나중에 추가된 테이블(user_trading_config 등)까지
+미리 만들어져서 다음 migration 과 충돌한다. Phase 1 기준 6개 테이블만 골라서 create.
+- 빈 DB: 6개 테이블 생성
+- 기존 DB: create_all 은 존재하는 테이블을 건드리지 않으므로 no-op
 
-이후 모든 스키마 변경은 별도 revision 으로 작성한다.
+이후 스키마 변경은 별도 revision 으로 작성.
 
 Revision ID: 0001_baseline
 Revises:
@@ -24,11 +25,23 @@ branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 
+_PHASE1_TABLES = {
+    "users",
+    "screened_stocks",
+    "positions",
+    "orders",
+    "buy_signals",
+    "system_config",
+}
+
+
 def upgrade() -> None:
     bind = op.get_bind()
-    Base.metadata.create_all(bind=bind)
+    tables = [t for t in Base.metadata.sorted_tables if t.name in _PHASE1_TABLES]
+    Base.metadata.create_all(bind=bind, tables=tables)
 
 
 def downgrade() -> None:
     bind = op.get_bind()
-    Base.metadata.drop_all(bind=bind)
+    tables = [t for t in Base.metadata.sorted_tables if t.name in _PHASE1_TABLES]
+    Base.metadata.drop_all(bind=bind, tables=tables)
