@@ -1,5 +1,5 @@
 from datetime import datetime
-from sqlalchemy import String, Integer, Float, Boolean, DateTime, ForeignKey, Enum as SAEnum
+from sqlalchemy import String, Integer, BigInteger, Float, Boolean, DateTime, ForeignKey, Enum as SAEnum
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 import enum
 from app.db.database import Base
@@ -67,7 +67,7 @@ class ScreenedStock(Base):
     current_price: Mapped[int] = mapped_column(Integer)
     high_1y: Mapped[int] = mapped_column(Integer)            # 1년 고점
     low_1y: Mapped[int] = mapped_column(Integer)             # 1년 저점
-    market_cap: Mapped[int] = mapped_column(Integer)         # 시가총액 (원)
+    market_cap: Mapped[int] = mapped_column(BigInteger)      # 시가총액 (원) — 조 단위라 BigInteger
     net_income: Mapped[float] = mapped_column(Float)         # 순이익 (억원)
     operating_income: Mapped[float] = mapped_column(Float)   # 영업이익 (억원)
     foreign_ratio: Mapped[float] = mapped_column(Float)      # 외국인 비율 (%)
