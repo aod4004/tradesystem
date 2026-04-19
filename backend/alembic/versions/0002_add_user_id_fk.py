@@ -1,7 +1,9 @@
-"""positions / orders / buy_signals 에 user_id FK 추가
+"""positions / orders / buy_signals 에 user_id FK 추가 (idempotent)
 
 기존 row 는 admin 유저로 backfill. admin 이 없으면 첫 번째 유저로,
 그것도 없으면 NOT NULL 전환을 보류 (다음 배포에서 fix).
+
+이전 실패/부분 commit 에서 살아남은 상태를 견디기 위해 모든 단계를 inspector 로 체크.
 
 Revision ID: 0002_add_user_id_fk
 Revises: 0001_baseline
@@ -23,8 +25,14 @@ _TABLES = ("positions", "orders", "buy_signals")
 
 
 def upgrade() -> None:
-    # 1) nullable 로 컬럼 + FK + 인덱스 추가
+    conn = op.get_bind()
+    inspector = sa.inspect(conn)
+
+    # 1) nullable 로 컬럼 + FK + 인덱스 추가 — 이미 있으면 스킵
     for table in _TABLES:
+        cols = {c["name"] for c in inspector.get_columns(table)}
+        if "user_id" in cols:
+            continue
         op.add_column(table, sa.Column("user_id", sa.Integer(), nullable=True))
         op.create_foreign_key(
             f"fk_{table}_user_id_users",
@@ -33,8 +41,10 @@ def upgrade() -> None:
         )
         op.create_index(f"ix_{table}_user_id", table, ["user_id"])
 
+    # inspector 캐시 갱신 (위에서 컬럼 추가했을 수 있음)
+    inspector = sa.inspect(conn)
+
     # 2) 기존 row 를 admin 유저(fallback: 최초 유저)로 backfill
-    conn = op.get_bind()
     owner_id = conn.execute(sa.text(
         "SELECT id FROM users WHERE is_admin = true ORDER BY id LIMIT 1"
     )).scalar()
@@ -50,8 +60,14 @@ def upgrade() -> None:
                 {"uid": owner_id},
             )
 
-    # 3) NULL 행이 하나도 없으면 NOT NULL 로 전환
+    # 3) NULL 행이 하나도 없으면 NOT NULL 로 전환 — 이미 NOT NULL 이면 no-op
     for table in _TABLES:
+        col = next(
+            (c for c in inspector.get_columns(table) if c["name"] == "user_id"),
+            None,
+        )
+        if col is None or col["nullable"] is False:
+            continue
         null_count = conn.execute(
             sa.text(f"SELECT COUNT(*) FROM {table} WHERE user_id IS NULL")
         ).scalar() or 0
@@ -65,7 +81,16 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    conn = op.get_bind()
+    inspector = sa.inspect(conn)
     for table in reversed(_TABLES):
-        op.drop_index(f"ix_{table}_user_id", table_name=table)
-        op.drop_constraint(f"fk_{table}_user_id_users", table, type_="foreignkey")
+        cols = {c["name"] for c in inspector.get_columns(table)}
+        if "user_id" not in cols:
+            continue
+        indexes = {idx["name"] for idx in inspector.get_indexes(table)}
+        if f"ix_{table}_user_id" in indexes:
+            op.drop_index(f"ix_{table}_user_id", table_name=table)
+        fks = {fk["name"] for fk in inspector.get_foreign_keys(table)}
+        if f"fk_{table}_user_id_users" in fks:
+            op.drop_constraint(f"fk_{table}_user_id_users", table, type_="foreignkey")
         op.drop_column(table, "user_id")

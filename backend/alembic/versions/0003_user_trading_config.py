@@ -1,4 +1,4 @@
-"""user_trading_config — 유저별 투자금·키움 키 설정 테이블
+"""user_trading_config — 유저별 투자금·키움 키 설정 테이블 (idempotent)
 
 Phase 2 에서는 total_investment 만 실제로 사용. kiwoom_app_key/secret/mock 은
 스키마만 준비하고 (향후 Phase 2.5 에서 클라이언트 per-user 분리와 함께 활용).
@@ -20,6 +20,11 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
+    bind = op.get_bind()
+    inspector = sa.inspect(bind)
+    if "user_trading_config" in inspector.get_table_names():
+        return  # 이미 있으면 스킵 (이전 실패 배포 등)
+
     op.create_table(
         "user_trading_config",
         sa.Column("user_id", sa.Integer(), sa.ForeignKey("users.id"), primary_key=True),
@@ -42,4 +47,8 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    bind = op.get_bind()
+    inspector = sa.inspect(bind)
+    if "user_trading_config" not in inspector.get_table_names():
+        return
     op.drop_table("user_trading_config")
