@@ -13,7 +13,7 @@ from app.db.user_config import (
     get_total_investment, get_trading_config, list_trading_users,
 )
 from app.core.kiwoom_client import get_or_create_user_client
-from app.strategy.executor import calc_buy_qty
+from app.strategy.executor import calc_buy_qty, execute_pending_buy_orders
 from app.strategy.guards import check_buy_guards, notify_guard_block
 from app.strategy.screener import run_screening
 from app.strategy.signal import detect_buy_signals
@@ -133,6 +133,40 @@ async def get_pending_signals(
             "is_excluded": s.is_excluded,
         })
     return out
+
+
+@router.post("/approve-pending")
+async def approve_pending_signals(
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Phase 4.2 — 승인 모드의 대기 신호를 지금 주문 전송.
+
+    `execute_pending_buy_orders` 를 수동으로 돌려 is_executed=False + is_excluded=False 인
+    모든 신호를 유저 키움 키로 지정가 주문 전송. 가드는 그대로 적용된다.
+    """
+    cfg = await get_trading_config(db, user.id)
+    if cfg is None or not cfg.kiwoom_app_key or not cfg.kiwoom_secret_key:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="keys_not_configured",
+        )
+    before = (
+        await db.execute(
+            select(BuySignal).where(
+                BuySignal.user_id == user.id,
+                BuySignal.is_executed == False,  # noqa: E712
+                BuySignal.is_excluded == False,  # noqa: E712
+            )
+        )
+    ).scalars().all()
+    target_count = len(before)
+    if target_count == 0:
+        return {"ok": True, "submitted": 0, "message": "대기 중인 신호가 없습니다"}
+
+    client = get_or_create_user_client(user.id, cfg)
+    await execute_pending_buy_orders(db, user.id, client)
+    return {"ok": True, "submitted": target_count}
 
 
 class PendingSignalExcludeRequest(BaseModel):

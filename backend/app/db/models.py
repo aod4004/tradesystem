@@ -58,6 +58,8 @@ class UserTradingConfig(Base):
     daily_order_count_limit: Mapped[int | None] = mapped_column(Integer, nullable=True)
     max_position_ratio: Mapped[float | None] = mapped_column(Float, nullable=True)
     risk_guards_enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+    # Phase 4.2 — 장 시작 전 사전 승인 모드 (True 면 08:50 자동 주문 스킵 + 승인 대기 카톡 요약)
+    require_morning_approval: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, onupdate=datetime.utcnow,
     )

@@ -8,6 +8,7 @@ import {
   fetchKakaoAuthorizeUrl,
   fetchKakaoStatus,
   fetchKiwoomStatus,
+  fetchMorningApproval,
   fetchRiskGuards,
   KakaoStatus,
   KiwoomKeysStatus,
@@ -16,6 +17,7 @@ import {
   saveRiskGuards,
   sendKakaoTest,
   setKakaoEnabled,
+  setMorningApproval,
 } from '../api/client'
 
 export default function Settings() {
@@ -37,6 +39,10 @@ export default function Settings() {
   const [kakaoBusy, setKakaoBusy] = useState(false)
   const [kakaoMsg, setKakaoMsg] = useState<string | null>(null)
   const [kakaoErr, setKakaoErr] = useState<string | null>(null)
+
+  // ── 사전 승인 모드 상태 (Phase 4.2) ─────────────────────────
+  const [approvalEnabled, setApprovalEnabled] = useState<boolean | null>(null)
+  const [approvalBusy, setApprovalBusy] = useState(false)
 
   // ── 리스크 가드 상태 ────────────────────────────────────────
   const [risk, setRisk] = useState<RiskGuardsStatus | null>(null)
@@ -65,7 +71,20 @@ export default function Settings() {
     }).catch(() => {})
     refreshKakao()
     refreshRisk()
+    fetchMorningApproval().then(s => setApprovalEnabled(s.enabled)).catch(() => {})
   }, [])
+
+  const onToggleApproval = async (enabled: boolean) => {
+    setApprovalBusy(true)
+    try {
+      const s = await setMorningApproval(enabled)
+      setApprovalEnabled(s.enabled)
+    } catch {
+      /* 토글 실패 시 상태 유지 */
+    } finally {
+      setApprovalBusy(false)
+    }
+  }
 
   // 카카오 OAuth 콜백 복귀 처리
   useEffect(() => {
@@ -335,6 +354,24 @@ export default function Settings() {
               {kakao.refresh_expires_at && ` · 리프레시 만료: ${new Date(kakao.refresh_expires_at).toLocaleString()}`}
             </p>
           )}
+        </section>
+
+        {/* 장 시작 전 사전 승인 모드 (Phase 4.2) -------------------- */}
+        <section className="bg-gray-800 rounded-xl p-5 mb-6">
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="text-lg font-semibold">장 시작 전 사전 승인 모드</h2>
+            <label className="inline-flex items-center gap-2 text-sm text-gray-300">
+              <input type="checkbox" checked={!!approvalEnabled}
+                onChange={e => onToggleApproval(e.target.checked)}
+                disabled={approvalBusy || approvalEnabled === null} />
+              사용
+            </label>
+          </div>
+          <p className="text-sm text-gray-400">
+            켜 두면 08:50 자동 매수가 즉시 나가지 않고 <span className="text-gray-200">승인 대기</span> 상태로 둡니다.
+            카카오톡으로 오늘 신호 요약이 전송되며, 대시보드의 "승인 대기" 카드에서
+            <span className="text-gray-200"> "전체 승인 &amp; 주문"</span> 을 눌러야 실제 주문이 전송됩니다.
+          </p>
         </section>
 
         {/* 런타임 리스크 가드 --------------------------------------- */}

@@ -348,6 +348,40 @@ async def get_risk_guards(
     return _build_risk_status(cfg)
 
 
+# ====================================================================== #
+#  장 시작 전 사전 승인 모드 (Phase 4.2)
+# ====================================================================== #
+
+class MorningApprovalStatus(BaseModel):
+    enabled: bool
+
+
+class MorningApprovalPayload(BaseModel):
+    enabled: bool
+
+
+@router.get("/morning-approval", response_model=MorningApprovalStatus)
+async def get_morning_approval(
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    cfg = await _load_cfg(db, user.id)
+    return MorningApprovalStatus(enabled=bool(cfg.require_morning_approval) if cfg else False)
+
+
+@router.patch("/morning-approval", response_model=MorningApprovalStatus)
+async def update_morning_approval(
+    payload: MorningApprovalPayload,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    cfg = await _get_or_create_config(db, user.id)
+    cfg.require_morning_approval = payload.enabled
+    await db.commit()
+    await db.refresh(cfg)
+    return MorningApprovalStatus(enabled=cfg.require_morning_approval)
+
+
 @router.patch("/risk-guards", response_model=RiskGuardsStatus)
 async def update_risk_guards(
     payload: RiskGuardsPayload,

@@ -101,6 +101,18 @@ export const fetchRiskGuards = () =>
 export const saveRiskGuards = (body: RiskGuardsPayload) =>
   api.patch<RiskGuardsStatus>('/settings/risk-guards', body).then(r => r.data)
 
+// 장 시작 전 사전 승인 모드 (Phase 4.2)
+export interface MorningApprovalStatus { enabled: boolean }
+
+export const fetchMorningApproval = () =>
+  api.get<MorningApprovalStatus>('/settings/morning-approval').then(r => r.data)
+
+export const setMorningApproval = (enabled: boolean) =>
+  api.patch<MorningApprovalStatus>('/settings/morning-approval', { enabled }).then(r => r.data)
+
+export const approvePendingSignals = () =>
+  api.post<{ ok: boolean; submitted: number; message?: string }>('/orders/approve-pending').then(r => r.data)
+
 // 카카오 알림 연동
 export interface KakaoStatus {
   configured: boolean

@@ -1,5 +1,9 @@
+import { useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { fetchTodayOrders, fetchPendingSignals, updatePendingSignal } from '../api/client'
+import {
+  approvePendingSignals, fetchMorningApproval,
+  fetchPendingSignals, fetchTodayOrders, updatePendingSignal,
+} from '../api/client'
 import { OrderRecord, PendingSignal } from '../types'
 
 const STATUS_LABELS: Record<string, string> = {
@@ -22,6 +26,12 @@ export default function OrderList() {
     queryFn: fetchPendingSignals,
     refetchInterval: 10000,
   })
+  const { data: approval } = useQuery({
+    queryKey: ['morning-approval'],
+    queryFn: fetchMorningApproval,
+    refetchInterval: 30000,
+  })
+  const [approving, setApproving] = useState(false)
 
   const toggleExclude = async (s: PendingSignal) => {
     try {
@@ -32,13 +42,52 @@ export default function OrderList() {
     }
   }
 
+  const onApproveAll = async () => {
+    const active = signals.filter(s => !s.is_excluded)
+    if (active.length === 0) {
+      alert('승인할 대기 신호가 없습니다')
+      return
+    }
+    if (!confirm(`${active.length}건의 매수 주문을 지금 전송합니다. 계속할까요?\n제외된 신호는 주문되지 않습니다.`)) return
+    setApproving(true)
+    try {
+      const r = await approvePendingSignals()
+      qc.invalidateQueries({ queryKey: ['signals'] })
+      qc.invalidateQueries({ queryKey: ['orders'] })
+      alert(`주문 ${r.submitted}건 전송 요청 완료`)
+    } catch (e: any) {
+      alert('승인 실패: ' + String(e?.response?.data?.detail ?? e?.message ?? e))
+    } finally {
+      setApproving(false)
+    }
+  }
+
+  const approvalOn = !!approval?.enabled
+  const pendingCount = signals.filter(s => !s.is_excluded).length
+
   return (
     <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
       {/* 내일 예정 매수 신호 */}
       <div className="bg-gray-800 rounded-xl p-4">
-        <h2 className="text-lg font-bold text-white mb-3">
-          내일 매수 예정 <span className="text-sm text-gray-400">({signals.length}건)</span>
-        </h2>
+        <div className="flex items-center justify-between mb-3 gap-2">
+          <h2 className="text-lg font-bold text-white">
+            내일 매수 예정 <span className="text-sm text-gray-400">({signals.length}건)</span>
+            {approvalOn && (
+              <span className="ml-2 text-xs px-2 py-0.5 rounded bg-amber-900 text-amber-200 align-middle">
+                승인 모드
+              </span>
+            )}
+          </h2>
+          {approvalOn && (
+            <button
+              onClick={onApproveAll}
+              disabled={approving || pendingCount === 0}
+              className="bg-emerald-600 hover:bg-emerald-700 disabled:bg-gray-600 text-white text-xs px-3 py-1.5 rounded font-medium whitespace-nowrap"
+            >
+              {approving ? '전송 중...' : `전체 승인 & 주문 (${pendingCount}건)`}
+            </button>
+          )}
+        </div>
         <table className="w-full text-sm text-gray-300">
           <thead>
             <tr className="text-gray-400 border-b border-gray-700">
