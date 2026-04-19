@@ -7,7 +7,9 @@ export function useRealtimeWs(onMessage: (msg: WsMessage) => void) {
 
   const connect = useCallback(() => {
     const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws'
-    const ws = new WebSocket(`${protocol}://${window.location.host}/ws/realtime`)
+    const token = localStorage.getItem('mk_auth_token') ?? ''
+    const q = token ? `?token=${encodeURIComponent(token)}` : ''
+    const ws = new WebSocket(`${protocol}://${window.location.host}/ws/realtime${q}`)
     wsRef.current = ws
 
     ws.onmessage = e => {

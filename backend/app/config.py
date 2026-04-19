@@ -44,6 +44,13 @@ class Settings(BaseSettings):
     # Server
     SECRET_KEY: str = "change_this_to_random_secret_key"
 
+    # Auth
+    JWT_SECRET: str = "change_this_to_random_jwt_secret_at_least_32_chars_long"
+    JWT_ALGORITHM: str = "HS256"
+    JWT_EXPIRE_MINUTES: int = 60 * 12   # 12 시간
+    ADMIN_EMAIL: str = "admin@example.com"
+    ADMIN_PASSWORD: str = "change_me_on_first_deploy"
+
     class Config:
         env_file = ".env"
         extra = "ignore"

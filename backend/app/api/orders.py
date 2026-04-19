@@ -4,6 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from sqlalchemy.orm import joinedload
 
+from app.auth import get_current_user
 from app.config import settings
 from app.db.database import get_db
 from app.db.models import Order, BuySignal
@@ -12,7 +13,7 @@ from app.strategy.executor import calc_buy_qty
 from app.strategy.screener import run_screening
 from app.strategy.signal import detect_buy_signals
 
-router = APIRouter(prefix="/api/orders", tags=["orders"])
+router = APIRouter(prefix="/api/orders", tags=["orders"], dependencies=[Depends(get_current_user)])
 
 
 class ManualOrderRequest(BaseModel):

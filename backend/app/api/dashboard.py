@@ -3,13 +3,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from sqlalchemy.orm import joinedload
 
+from app.auth import get_current_user
 from app.config import settings
 from app.db.database import get_db
 from app.db.models import ScreenedStock, Position, Order, BuySignal, PositionStatus, OrderStatus
 from app.core.kiwoom_client import get_kiwoom_client
 from app.strategy.executor import calc_buy_qty
 
-router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
+router = APIRouter(prefix="/api/dashboard", tags=["dashboard"], dependencies=[Depends(get_current_user)])
 
 
 @router.get("")

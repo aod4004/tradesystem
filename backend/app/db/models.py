@@ -22,6 +22,18 @@ class PositionStatus(str, enum.Enum):
     CLOSED = "closed"        # 청산 완료
 
 
+class User(Base):
+    """사용자 계정"""
+    __tablename__ = "users"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    email: Mapped[str] = mapped_column(String(120), unique=True, index=True)
+    password_hash: Mapped[str] = mapped_column(String(200))
+    is_admin: Mapped[bool] = mapped_column(Boolean, default=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
 class ScreenedStock(Base):
     """스크리닝 통과 종목"""
     __tablename__ = "screened_stocks"

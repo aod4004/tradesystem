@@ -1,9 +1,10 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 
+from app.auth import get_current_user
 from app.core.kiwoom_client import get_kiwoom_client, to_int, to_float
 from app.config import settings
 
-router = APIRouter(prefix="/api/account", tags=["account"])
+router = APIRouter(prefix="/api/account", tags=["account"], dependencies=[Depends(get_current_user)])
 
 
 @router.get("/balance")
