@@ -30,8 +30,10 @@ function Dashboard() {
       {/* 헤더 */}
       <div className="flex items-center justify-between mb-6">
         <div>
-          <h1 className="text-2xl font-bold text-white">주식 자동매매 시스템</h1>
-          <p className="text-gray-400 text-sm mt-1">키움증권 REST API · 낙폭 과대 반등 전략</p>
+          <h1 className="text-2xl md:text-3xl font-bold bg-gradient-to-r from-blue-400 via-cyan-300 to-emerald-400 bg-clip-text text-transparent tracking-tight">
+            AutoTrade
+          </h1>
+          <p className="text-gray-400 text-sm mt-1">Powered by Kiwoom REST API</p>
         </div>
         <div className="flex gap-3">
           <button
