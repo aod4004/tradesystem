@@ -5,9 +5,12 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth import get_current_user
-from app.core.kiwoom_client import KiwoomClient
+from app.core.kiwoom_client import (
+    KiwoomClient, get_or_create_user_client, invalidate_user_client,
+)
 from app.db.database import get_db
 from app.db.models import User, UserTradingConfig
+from app.ws.kiwoom_ws import kiwoom_pool
 
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
@@ -85,6 +88,15 @@ async def update_keys(
         cfg.total_investment = payload.total_investment
     await db.commit()
     await db.refresh(cfg)
+
+    # 레지스트리/WS 풀에 새 키 반영 — 기존 연결이 있으면 종료 후 재연결
+    await invalidate_user_client(user.id)
+    client = get_or_create_user_client(user.id, cfg)
+    try:
+        await kiwoom_pool.connect_user(user.id, client)
+    except Exception as e:
+        print(f"[settings] user={user.id} WS 연결 실패: {e}")
+
     return KiwoomKeysStatus(
         has_keys=True, mock=cfg.kiwoom_mock, total_investment=cfg.total_investment,
     )
@@ -104,6 +116,11 @@ async def delete_keys(
         cfg.kiwoom_app_key = None
         cfg.kiwoom_secret_key = None
         await db.commit()
+
+    # WS 연결 및 캐시된 클라이언트 정리
+    await kiwoom_pool.disconnect_user(user.id)
+    await invalidate_user_client(user.id)
+
     return KiwoomKeysStatus(
         has_keys=False,
         mock=cfg.kiwoom_mock if cfg else True,

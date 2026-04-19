@@ -29,8 +29,10 @@ export interface Position {
 }
 
 export interface PendingSignal {
+  id: number
   stock_code: string
   stock_name: string
+  source: 'screening' | 'watchlist'
   trigger_round: number
   target_order_price: number
   quantity: number
@@ -38,6 +40,13 @@ export interface PendingSignal {
   investment_ratio: number   // 총 투자금 대비 %
   signal_date: string
   is_executed?: boolean
+  is_excluded: boolean
+}
+
+export interface WatchlistItem {
+  stock_code: string
+  stock_name: string
+  added_at: string
 }
 
 export interface OrderRecord {

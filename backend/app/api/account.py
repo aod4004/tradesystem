@@ -3,7 +3,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth import get_current_user
-from app.core.kiwoom_client import make_user_client, to_int, to_float
+from app.core.kiwoom_client import get_or_create_user_client, to_int, to_float
 from app.db.database import get_db
 from app.db.models import User, UserTradingConfig
 from app.db.user_config import get_total_investment
@@ -31,18 +31,15 @@ async def get_balance(
             detail="keys_not_configured",
         )
 
-    client = make_user_client(cfg)
+    client = get_or_create_user_client(user.id, cfg)
     try:
         bal = await client.get_balance()
         dep = await client.get_deposit()
     except Exception as e:
-        await client.close()
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail=f"키움 API 오류: {e}",
         )
-    else:
-        await client.close()
 
     holdings = [
         {

@@ -1,10 +1,11 @@
 """
-MA20 (20일 이동평균) 캐시 갱신
+이동평균선 캐시 갱신 (MA20 / MA60 / MA120)
 
-5차 매도 조건(주가가 20일 이동평균선과 만날 때)을 평가하려면
-보유 종목의 최신 MA20 값이 실시간 체결 처리 시점에 가용해야 한다.
+매도 조건 중 "주가가 이동평균선과 만날 때" 를 실시간으로 평가하려면
+보유 종목의 최신 MA 값이 WebSocket 체결 처리 시점에 가용해야 한다.
 
-장 마감 후 일봉 차트를 받아 MA20을 계산하고 kiwoom_ws._ma20_cache 에 주입.
+장 마감 후 일봉 차트를 받아 settings.SELL_MA_PERIODS 별 MA를 계산하고
+kiwoom_pool._ma_cache (글로벌, 모든 유저 WS 공용) 에 주입.
 """
 import asyncio
 import numpy as np
@@ -18,11 +19,11 @@ from app.db.models import Position, PositionStatus
 
 async def refresh_ma20_for_active_positions() -> int:
     """
-    보유 중인 모든 종목의 MA20을 계산해 WebSocket 캐시에 주입.
+    보유 중인 모든 종목의 MA를 계산해 WebSocket 캐시에 주입.
     반환: 갱신된 종목 수
     """
     # 순환 import 방지 — 런타임 import
-    from app.ws.kiwoom_ws import kiwoom_ws
+    from app.ws.kiwoom_ws import kiwoom_pool
 
     async with AsyncSessionLocal() as db:
         positions = (
@@ -42,23 +43,27 @@ async def refresh_ma20_for_active_positions() -> int:
         nonlocal updated
         async with sem:
             try:
-                ma = await _compute_ma20(client, code)
-                if ma is not None:
-                    kiwoom_ws.update_ma20(code, ma)
+                mas = await _compute_mas(client, code)
+                if mas:
+                    kiwoom_pool.update_ma(code, mas)
                     updated += 1
                 await asyncio.sleep(0.2)
             except Exception as e:
-                print(f"[ma20] {code} 계산 오류: {e}")
+                print(f"[ma] {code} 계산 오류: {e}")
 
     await asyncio.gather(*(work(p.stock_code) for p in positions))
-    print(f"[ma20] {updated}/{len(positions)}개 종목 캐시 갱신")
+    print(f"[ma] {updated}/{len(positions)}개 종목 캐시 갱신")
     return updated
 
 
-async def _compute_ma20(client, stock_code: str) -> float | None:
+async def _compute_mas(client, stock_code: str) -> dict[int, float]:
+    """주기별 MA를 한 번의 차트 조회로 동시 계산. 봉 수 부족하면 그 주기는 제외."""
     candles = await client.get_daily_chart(stock_code)
-    closes = [to_int(c.get("cur_prc")) for c in candles[: settings.MA_PERIOD]]
+    closes = [to_int(c.get("cur_prc")) for c in candles]
     closes = [c for c in closes if c > 0]
-    if len(closes) < settings.MA_PERIOD:
-        return None
-    return float(np.mean(closes))
+
+    out: dict[int, float] = {}
+    for period in settings.SELL_MA_PERIODS:
+        if len(closes) >= period:
+            out[period] = float(np.mean(closes[:period]))
+    return out

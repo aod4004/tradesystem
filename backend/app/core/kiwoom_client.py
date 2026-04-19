@@ -9,8 +9,10 @@
 - 계좌번호는 토큰에 귀속 — 주문/조회 body에 전달하지 않음
 - HashKey 불필요
 
-Phase 2 에서는 `get_kiwoom_client()` 싱글턴(env 기반)을 스케줄러/WS 가 그대로 쓰고,
-유저별 키가 필요한 엔드포인트(예: 계좌 잔고)는 `make_user_client()` 로 per-user 인스턴스 생성.
+Phase 2.5 부터:
+ - 시스템 키(env)는 `get_kiwoom_client()` — 스크리너/MA 등 시장 데이터 조회 fallback.
+ - 유저 키는 `get_or_create_user_client(user_id, cfg)` — 레지스트리에 캐시되어 scheduler/WS/executor 가 공유.
+ - 레지스트리 정리: `invalidate_user_client` (키 변경/삭제), `close_all_user_clients` (서버 종료).
 """
 import hashlib
 from datetime import datetime
@@ -326,21 +328,66 @@ class KiwoomClient:
             await self._redis.aclose()
 
 
-# 환경변수 기반 싱글턴 — scheduler / WS / screener 등 글로벌 사용
-_client: KiwoomClient | None = None
+# ---------------------------------------------------------------------- #
+#  시스템(env) 싱글턴 — 스크리너 전용
+# ---------------------------------------------------------------------- #
+_system_client: KiwoomClient | None = None
 
 
 def get_kiwoom_client() -> KiwoomClient:
-    global _client
-    if _client is None:
-        _client = KiwoomClient()
-    return _client
+    """env 기반 시스템 키움 클라이언트 — 스크리닝(시장 데이터)용 fallback."""
+    global _system_client
+    if _system_client is None:
+        _system_client = KiwoomClient()
+    return _system_client
 
 
 def make_user_client(cfg: "UserTradingConfig") -> KiwoomClient:
-    """유저별 설정으로 ephemeral 클라이언트 생성. 호출 후 close() 권장."""
+    """유저별 설정으로 ephemeral 클라이언트 생성. 호출 후 close() 권장.
+
+    registry 를 통하지 않고 단건 호출(예: 계좌 잔고 조회 API) 에서 쓴다.
+    """
     return KiwoomClient(
         app_key=cfg.kiwoom_app_key or "",
         secret_key=cfg.kiwoom_secret_key or "",
         mock=cfg.kiwoom_mock,
     )
+
+
+# ---------------------------------------------------------------------- #
+#  유저별 클라이언트 레지스트리
+# ---------------------------------------------------------------------- #
+# 스케줄러/WS/executor 가 한 유저의 키로 반복 호출하므로 httpx/Redis 리소스를 공유한다.
+# 키가 바뀌면 이전 클라이언트를 닫고 새로 생성.
+
+_user_clients: dict[int, KiwoomClient] = {}
+
+
+def get_or_create_user_client(user_id: int, cfg: "UserTradingConfig") -> KiwoomClient:
+    """cfg 의 현재 키로 유효한 KiwoomClient 반환. 키가 바뀌었으면 교체."""
+    app_key = cfg.kiwoom_app_key or ""
+    existing = _user_clients.get(user_id)
+    if existing is not None and existing._app_key == app_key and existing._mock == cfg.kiwoom_mock:
+        return existing
+    # 키 변경 — 기존 클라이언트를 정리 후 새로 생성.
+    # close 는 async 라 여기선 등록만 해두고 호출부에서 invalidate_user_client 를 거치는 게 이상적이나,
+    # 호출 편의를 위해 동기로 덮어씌우고 이전 인스턴스는 GC 에 맡김 (httpx 는 __del__ 에서 정리됨).
+    new_client = KiwoomClient(app_key=app_key, secret_key=cfg.kiwoom_secret_key or "", mock=cfg.kiwoom_mock)
+    _user_clients[user_id] = new_client
+    return new_client
+
+
+async def invalidate_user_client(user_id: int) -> None:
+    """유저 클라이언트를 명시적으로 종료 — 키 삭제/회원 탈퇴 시 호출."""
+    client = _user_clients.pop(user_id, None)
+    if client is not None:
+        try:
+            await client.close()
+        except Exception:
+            pass
+
+
+async def close_all_user_clients() -> None:
+    """서버 종료 시 전체 정리."""
+    for user_id in list(_user_clients.keys()):
+        await invalidate_user_client(user_id)

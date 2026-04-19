@@ -1,7 +1,6 @@
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
-from sqlalchemy.orm import joinedload
 
 from app.auth import get_current_user
 from app.db.database import get_db
@@ -42,7 +41,6 @@ async def get_dashboard(
             BuySignal.user_id == user.id,
             BuySignal.is_executed == False,  # noqa: E712
         )
-        .options(joinedload(BuySignal.stock))
     )).scalars().all()
 
     # 최근 주문 이력
@@ -125,8 +123,10 @@ def _format_signal(s: BuySignal, total_invest: float) -> dict:
     amount = qty * s.target_order_price
     ratio = (amount / total_invest * 100) if total_invest else 0
     return {
+        "id": s.id,
         "stock_code": s.stock_code,
-        "stock_name": s.stock.name if s.stock else "",
+        "stock_name": s.stock_name or "",
+        "source": s.source,
         "trigger_round": s.trigger_round,
         "target_order_price": s.target_order_price,
         "quantity": qty,
@@ -134,6 +134,7 @@ def _format_signal(s: BuySignal, total_invest: float) -> dict:
         "investment_ratio": round(ratio, 2),
         "signal_date": s.signal_date.isoformat(),
         "is_executed": s.is_executed,
+        "is_excluded": s.is_excluded,
     }
 
 

@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
 from app.config import settings
-from app.core.kiwoom_client import get_kiwoom_client
+from app.core.kiwoom_client import KiwoomClient
 from app.db.models import (
     Position, Order, BuySignal,
     OrderType, OrderStatus,
@@ -19,9 +19,10 @@ from app.db.models import (
 from app.db.user_config import get_total_investment
 
 
-async def execute_pending_buy_orders(db: AsyncSession, user_id: int):
+async def execute_pending_buy_orders(
+    db: AsyncSession, user_id: int, client: KiwoomClient,
+):
     """장 시작 전(08:50) — 해당 유저의 전날 감지된 매수 신호를 지정가 주문으로 전송"""
-    client = get_kiwoom_client()
     total_invest = await get_total_investment(db, user_id)
     signals = (
         await db.execute(
@@ -33,6 +34,13 @@ async def execute_pending_buy_orders(db: AsyncSession, user_id: int):
     ).scalars().all()
 
     for sig in signals:
+        # 유저가 제외한 신호는 주문하지 않고, 재평가 대상에서 빼기 위해 executed 처리
+        if sig.is_excluded:
+            sig.is_executed = True
+            await db.commit()
+            print(f"[executor] {sig.stock_code} {sig.trigger_round}차 — 유저가 제외 — 스킵")
+            continue
+
         try:
             qty = calc_buy_qty(sig.target_order_price, total_invest)
             if qty <= 0:
@@ -58,7 +66,7 @@ async def execute_pending_buy_orders(db: AsyncSession, user_id: int):
             order = Order(
                 user_id=user_id,
                 stock_code=sig.stock_code,
-                stock_name="",
+                stock_name=sig.stock_name or "",
                 order_type=OrderType.BUY,
                 order_round=sig.trigger_round,
                 order_price=sig.target_order_price,
@@ -70,7 +78,7 @@ async def execute_pending_buy_orders(db: AsyncSession, user_id: int):
             sig.is_executed = True
             await db.commit()
 
-            print(f"[executor] 매수 주문 전송: {sig.stock_code} {qty}주 @{sig.target_order_price:,}원 ({sig.trigger_round}차) ord_no={order_no}")
+            print(f"[executor] 매수 주문 전송: {sig.stock_code} {qty}주 @{sig.target_order_price:,}원 ({sig.trigger_round}차, {sig.source}) ord_no={order_no}")
 
         except Exception as e:
             print(f"[executor] 매수 주문 오류 ({sig.stock_code}): {e}")
@@ -80,15 +88,18 @@ async def execute_sell_order(
     db: AsyncSession,
     position: Position,
     sell_round: int,
+    trigger_bit: int,
     current_price: int,
+    client: KiwoomClient,
 ) -> bool:
-    """매도 주문 전송 (Position 은 건드리지 않음 — 체결 이벤트에서 갱신)"""
-    if await _has_open_order(
-        db, position.user_id, position.stock_code, OrderType.SELL, sell_round, position.id
-    ):
+    """매도 주문 전송 (Position 은 건드리지 않음 — 체결 이벤트에서 갱신).
+
+    trigger_bit: 어떤 매도 조건이 발동됐는지 식별자. 체결 시 Position.sold_triggers 에 set.
+    """
+    # 같은 조건(bit)으로 이미 떠있는 SUBMITTED 주문이 있으면 중복 전송 방지
+    if await _has_open_sell_for_trigger(db, position, trigger_bit):
         return False
 
-    client = get_kiwoom_client()
     sell_qty = max(1, round(position.quantity * settings.SELL_QUANTITY_RATIO))
 
     try:
@@ -108,6 +119,7 @@ async def execute_sell_order(
             stock_name=position.stock_name,
             order_type=OrderType.SELL,
             order_round=sell_round,
+            sell_trigger_bit=trigger_bit,
             order_price=current_price,
             order_qty=sell_qty,
             kiwoom_order_no=order_no,
@@ -116,7 +128,7 @@ async def execute_sell_order(
         db.add(order)
         await db.commit()
 
-        print(f"[executor] 매도 주문 전송: {position.stock_code} {sell_qty}주 @{current_price:,}원 ({sell_round}차) ord_no={order_no}")
+        print(f"[executor] 매도 주문 전송: {position.stock_code} {sell_qty}주 @{current_price:,}원 (tranche {sell_round}, trigger bit {trigger_bit}) ord_no={order_no}")
         return True
 
     except Exception as e:
@@ -124,10 +136,24 @@ async def execute_sell_order(
         return False
 
 
+async def _has_open_sell_for_trigger(
+    db: AsyncSession, position: Position, trigger_bit: int
+) -> bool:
+    stmt = select(Order).where(
+        Order.user_id == position.user_id,
+        Order.position_id == position.id,
+        Order.order_type == OrderType.SELL,
+        Order.sell_trigger_bit == trigger_bit,
+        Order.status == OrderStatus.SUBMITTED,
+    )
+    return (await db.execute(stmt)).scalar_one_or_none() is not None
+
+
 async def execute_extra_buy_order(
     db: AsyncSession,
     position: Position,
     current_price: int,
+    client: KiwoomClient,
 ) -> bool:
     """
     추가 매수 실행 — 3회 이상 매도 완료 후 저점의 90% 이하 하락 시 발동
@@ -139,7 +165,6 @@ async def execute_extra_buy_order(
     ):
         return False
 
-    client = get_kiwoom_client()
     total_invest = await get_total_investment(db, position.user_id)
     qty = calc_buy_qty(current_price, total_invest)
     if qty <= 0:

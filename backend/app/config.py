@@ -27,9 +27,10 @@ class Settings(BaseSettings):
     BUY_RATIO_PER_ROUND: float = 0.02      # 1회 매수 = 총 투자금의 2%
     MAX_BUY_ROUNDS: int = 5                 # 종목당 최대 5회
     MAX_POSITION_RATIO: float = 0.10        # 종목당 최대 10%
-    SELL_RATIOS: list[float] = [0.05, 0.10, 0.15, 0.20]  # 1~4차 매도 수익률
+    SELL_RATIOS: list[float] = [0.05, 0.10, 0.15, 0.20]  # 수익률 기반 매도 조건
     SELL_QUANTITY_RATIO: float = 0.20       # 1회 매도시 보유 수량의 20%
-    MA_PERIOD: int = 20                     # 이동평균선 기간 (5차 매도)
+    SELL_MA_PERIODS: list[int] = [20, 60, 120]  # 이동평균선 터치 매도 조건
+    MAX_SELL_TRANCHES: int = 5              # 총 매도 회차 (5 × 20% = 100%)
 
     # Stock screening
     MAX_MARKET_CAP: int = 1_000_000_000_000   # 시가총액 1조 이하

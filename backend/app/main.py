@@ -8,13 +8,17 @@ from sqlalchemy import select
 
 from app.auth import authenticate_websocket, hash_password
 from app.config import settings
+from app.core.kiwoom_client import close_all_user_clients
 from app.db.database import AsyncSessionLocal
 from app.db.models import User, UserTradingConfig
-from app.api import auth as auth_api, dashboard, account, orders, settings as settings_api
+from app.api import (
+    auth as auth_api, dashboard, account, orders,
+    settings as settings_api, watchlist as watchlist_api,
+)
 from app.scheduler.jobs import create_scheduler
 from app.strategy.ma20 import refresh_ma20_for_active_positions
 from app.ws.manager import manager
-from app.ws.kiwoom_ws import kiwoom_ws
+from app.ws.kiwoom_ws import kiwoom_pool
 
 
 async def ensure_admin_user():
@@ -58,15 +62,20 @@ async def lifespan(app: FastAPI):
     await ensure_admin_user()
     scheduler = create_scheduler()
     scheduler.start()
-    await kiwoom_ws.start()
+    # 키 등록된 모든 유저의 키움 WS 시작 (각 유저 토큰 사용)
+    try:
+        await kiwoom_pool.start()
+    except Exception as e:
+        print(f"[main] 키움 풀 시작 실패: {e}")
     try:
         await refresh_ma20_for_active_positions()
     except Exception as e:
-        print(f"[main] 초기 MA20 갱신 실패: {e}")
+        print(f"[main] 초기 MA 갱신 실패: {e}")
     print("[main] 서버 시작 완료")
     yield
     scheduler.shutdown()
-    await kiwoom_ws.stop()
+    await kiwoom_pool.stop()
+    await close_all_user_clients()
     print("[main] 서버 종료")
 
 
@@ -84,6 +93,7 @@ app.include_router(dashboard.router)
 app.include_router(account.router)
 app.include_router(orders.router)
 app.include_router(settings_api.router)
+app.include_router(watchlist_api.router)
 
 
 @app.websocket("/ws/realtime")

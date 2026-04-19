@@ -14,10 +14,12 @@ from app.auth import (
     hash_password,
     verify_password,
 )
+from app.core.kiwoom_client import invalidate_user_client
 from app.db.database import get_db
 from app.db.models import (
-    BuySignal, Order, Position, User, UserTradingConfig,
+    BuySignal, Order, Position, User, UserTradingConfig, UserWatchlist,
 )
+from app.ws.kiwoom_ws import kiwoom_pool
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -102,9 +104,14 @@ async def delete_me(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid password",
         )
 
+    # WS/클라이언트 먼저 정리 — DB 삭제 이후 동작을 방지
+    await kiwoom_pool.disconnect_user(current.id)
+    await invalidate_user_client(current.id)
+
     await db.execute(delete(Order).where(Order.user_id == current.id))
     await db.execute(delete(BuySignal).where(BuySignal.user_id == current.id))
     await db.execute(delete(Position).where(Position.user_id == current.id))
+    await db.execute(delete(UserWatchlist).where(UserWatchlist.user_id == current.id))
     await db.execute(
         delete(UserTradingConfig).where(UserTradingConfig.user_id == current.id)
     )

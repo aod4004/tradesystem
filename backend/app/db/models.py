@@ -78,8 +78,8 @@ class ScreenedStock(Base):
     screened_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 
-    positions: Mapped[list["Position"]] = relationship("Position", back_populates="stock")
-    buy_signals: Mapped[list["BuySignal"]] = relationship("BuySignal", back_populates="stock")
+    # positions / buy_signals 는 stock_code FK 가 0005 에서 제거되므로 관계 선언 제거.
+    # 필요할 때 명시적 쿼리로 조인.
 
 
 class Position(Base):
@@ -88,11 +88,14 @@ class Position(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), index=True)
-    stock_code: Mapped[str] = mapped_column(String(10), ForeignKey("screened_stocks.code"), index=True)
+    stock_code: Mapped[str] = mapped_column(String(10), index=True)   # FK 0005에서 드롭 — 관심종목 대응
     stock_name: Mapped[str] = mapped_column(String(50))
 
     buy_rounds_done: Mapped[int] = mapped_column(Integer, default=0)   # 완료된 매수 차수
-    sell_rounds_done: Mapped[int] = mapped_column(Integer, default=0)  # 완료된 매도 차수
+    sell_rounds_done: Mapped[int] = mapped_column(Integer, default=0)  # 완료된 매도 tranche 수 (0~5)
+    # 발동된 매도 조건 비트마스크. 비트 레이아웃:
+    #   0~3 = 수익률 5/10/15/20%, 4+i = SELL_MA_PERIODS[i] (MA20/60/120) 터치
+    sold_triggers: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     quantity: Mapped[int] = mapped_column(Integer, default=0)          # 현재 보유 수량
     avg_buy_price: Mapped[float] = mapped_column(Float, default=0)     # 평균 매입가
     total_buy_amount: Mapped[float] = mapped_column(Float, default=0)  # 총 매입금액
@@ -105,7 +108,6 @@ class Position(Base):
     opened_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     closed_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)
 
-    stock: Mapped["ScreenedStock"] = relationship("ScreenedStock", back_populates="positions")
     orders: Mapped[list["Order"]] = relationship("Order", back_populates="position")
 
 
@@ -120,7 +122,9 @@ class Order(Base):
     stock_name: Mapped[str] = mapped_column(String(50))
 
     order_type: Mapped[OrderType] = mapped_column(SAEnum(OrderType))
-    order_round: Mapped[int] = mapped_column(Integer)             # 몇 차 매수/매도
+    order_round: Mapped[int] = mapped_column(Integer)             # 몇 차 매수/매도 (0=추가매수, SELL은 tranche 1~5)
+    # 매도 주문일 때 발동된 조건의 비트 index (Position.sold_triggers 와 동일한 비트 레이아웃)
+    sell_trigger_bit: Mapped[int | None] = mapped_column(Integer, nullable=True)
     order_price: Mapped[int] = mapped_column(Integer)             # 주문 가격 (지정가)
     order_qty: Mapped[int] = mapped_column(Integer)               # 주문 수량
     filled_price: Mapped[int] = mapped_column(Integer, nullable=True)
@@ -135,12 +139,16 @@ class Order(Base):
 
 
 class BuySignal(Base):
-    """매수 신호 기록"""
+    """매수 신호 기록. stock_code FK 는 0005 에서 드롭 — 유저 관심종목도 담기 위함.
+    스크리닝 유래 신호는 ScreenedStock 에 매칭되고, 관심종목 유래 신호는 stock_name 만 유효.
+    """
     __tablename__ = "buy_signals"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), index=True)
-    stock_code: Mapped[str] = mapped_column(String(10), ForeignKey("screened_stocks.code"), index=True)
+    stock_code: Mapped[str] = mapped_column(String(10), index=True)
+    stock_name: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    source: Mapped[str] = mapped_column(String(20), default="screening")   # 'screening' | 'watchlist'
     signal_date: Mapped[datetime] = mapped_column(DateTime)
     trigger_round: Mapped[int] = mapped_column(Integer)           # 1~5차
     trigger_price: Mapped[float] = mapped_column(Float)           # 조건 트리거 가격
@@ -148,9 +156,18 @@ class BuySignal(Base):
     prev_close: Mapped[int] = mapped_column(Integer)              # 신호 발생일 종가 (양봉 확인용)
     prev_open: Mapped[int] = mapped_column(Integer)               # 신호 발생일 시가
     is_executed: Mapped[bool] = mapped_column(Boolean, default=False)
+    is_excluded: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
-    stock: Mapped["ScreenedStock"] = relationship("ScreenedStock", back_populates="buy_signals")
+
+class UserWatchlist(Base):
+    """유저가 직접 등록한 관심 종목 — 스크리닝 후보에 추가되어 동일 매수 전략 적용."""
+    __tablename__ = "user_watchlist"
+
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), primary_key=True)
+    stock_code: Mapped[str] = mapped_column(String(10), primary_key=True)
+    stock_name: Mapped[str] = mapped_column(String(50))
+    added_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
 class SystemConfig(Base):

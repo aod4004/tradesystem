@@ -30,9 +30,19 @@ from app.db.models import ScreenedStock
 # 안전 장치: 스크리닝 최대 소요 시간(초). 초과 시 더 이상 새 종목을 평가하지 않음.
 SCREENING_MAX_SECONDS = 20 * 60    # 20분
 
+# 동시 요청 수 — 키움 rate limit 에 여유를 둔 값.
+SCREENING_CONCURRENCY = 10
 
-async def run_screening(db: AsyncSession) -> list[ScreenedStock]:
-    """전체 종목 스크리닝 실행 (장 마감 후 1회)"""
+
+async def run_screening(
+    db: AsyncSession,
+    progress: dict | None = None,
+) -> list[ScreenedStock]:
+    """전체 종목 스크리닝 실행 (장 마감 후 1회).
+
+    progress 가 주어지면 총/진행/선정 개수를 실시간으로 갱신한다.
+    키: total, processed, selected.
+    """
     client = get_kiwoom_client()
 
     # 기존 스크리닝 종목 비활성화
@@ -69,10 +79,15 @@ async def run_screening(db: AsyncSession) -> list[ScreenedStock]:
 
     results: list[ScreenedStock] = []
     eval_stats = Counter()
-    semaphore = asyncio.Semaphore(3)
+    semaphore = asyncio.Semaphore(SCREENING_CONCURRENCY)
     started_at = time.monotonic()
     total = len(stock_rows)
     processed = 0
+
+    if progress is not None:
+        progress["total"] = total
+        progress["processed"] = 0
+        progress["selected"] = 0
 
     async def check_stock(code: str, name: str, market: str):
         nonlocal processed
@@ -83,13 +98,15 @@ async def run_screening(db: AsyncSession) -> list[ScreenedStock]:
             reason = await _evaluate_with_retry(client, code, name, market, results, db)
             eval_stats[reason] += 1
             processed += 1
+            if progress is not None:
+                progress["processed"] = processed
+                progress["selected"] = len(results)
             if processed % 200 == 0:
                 elapsed = time.monotonic() - started_at
                 print(
                     f"[screener] 진행 {processed}/{total} "
                     f"(선정 {len(results)}, {elapsed:.0f}초 경과)"
                 )
-            await asyncio.sleep(0.1)
 
     await asyncio.gather(*(check_stock(*r) for r in stock_rows))
     await db.commit()
