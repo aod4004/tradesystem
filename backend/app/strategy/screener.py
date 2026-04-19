@@ -15,6 +15,7 @@ ka10081 로 1년 일봉을 받아 고/저점을 계산한다.
  - 탈락 사유를 집계해서 최종 요약 로그 출력
 """
 import asyncio
+import time
 from collections import Counter
 from datetime import datetime
 
@@ -24,6 +25,10 @@ from sqlalchemy import update
 from app.config import settings
 from app.core.kiwoom_client import get_kiwoom_client, to_int, to_float
 from app.db.models import ScreenedStock
+
+
+# 안전 장치: 스크리닝 최대 소요 시간(초). 초과 시 더 이상 새 종목을 평가하지 않음.
+SCREENING_MAX_SECONDS = 20 * 60    # 20분
 
 
 async def run_screening(db: AsyncSession) -> list[ScreenedStock]:
@@ -65,18 +70,33 @@ async def run_screening(db: AsyncSession) -> list[ScreenedStock]:
     results: list[ScreenedStock] = []
     eval_stats = Counter()
     semaphore = asyncio.Semaphore(3)
+    started_at = time.monotonic()
+    total = len(stock_rows)
+    processed = 0
 
     async def check_stock(code: str, name: str, market: str):
+        nonlocal processed
+        if time.monotonic() - started_at > SCREENING_MAX_SECONDS:
+            eval_stats["timeout_skipped"] += 1
+            return
         async with semaphore:
             reason = await _evaluate_with_retry(client, code, name, market, results, db)
             eval_stats[reason] += 1
-            await asyncio.sleep(0.2)
+            processed += 1
+            if processed % 200 == 0:
+                elapsed = time.monotonic() - started_at
+                print(
+                    f"[screener] 진행 {processed}/{total} "
+                    f"(선정 {len(results)}, {elapsed:.0f}초 경과)"
+                )
+            await asyncio.sleep(0.1)
 
     await asyncio.gather(*(check_stock(*r) for r in stock_rows))
     await db.commit()
 
+    elapsed = time.monotonic() - started_at
     print(
-        f"[screener] 완료 — 선정 {len(results)}개 / 평가 결과: {dict(eval_stats)}"
+        f"[screener] 완료 — 선정 {len(results)}개 / {elapsed:.0f}초 / 평가 결과: {dict(eval_stats)}"
     )
     return results
 
@@ -140,15 +160,21 @@ async def _evaluate_stock(client, code: str, name: str, market: str):
     if net_income <= 0:
         return None, "no_profit"
 
-    candles = await client.get_daily_chart(code)
-    closes = [to_int(c.get("cur_prc")) for c in candles]
-    closes = [p for p in closes if p > 0]
-    if len(closes) < 20:
-        return None, "chart_insufficient"
+    # 1년 고/저 — ka10001의 250일 고저점으로 해결(ka10081 호출 절약)
+    high_1y = abs(to_int(info.get("250hgst")))
+    low_1y = abs(to_int(info.get("250lwst")))
 
-    high_1y = max(closes)
-    low_1y = min(closes)
-    if low_1y <= 0:
+    # 값이 비어있으면 ka10081로 폴백
+    if high_1y <= 0 or low_1y <= 0:
+        candles = await client.get_daily_chart(code)
+        closes = [to_int(c.get("cur_prc")) for c in candles]
+        closes = [p for p in closes if p > 0]
+        if len(closes) < 20:
+            return None, "chart_insufficient"
+        high_1y = max(closes)
+        low_1y = min(closes)
+
+    if high_1y <= 0 or low_1y <= 0:
         return None, "chart_insufficient"
 
     rise_from_low = high_1y / low_1y
