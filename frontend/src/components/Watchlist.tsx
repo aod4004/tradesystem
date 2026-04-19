@@ -5,9 +5,12 @@ import { WatchlistItem } from '../types'
 
 export default function Watchlist() {
   const qc = useQueryClient()
-  const { data: items = [], isLoading } = useQuery<WatchlistItem[]>({
+  const { data: items = [], isLoading, isFetching } = useQuery<WatchlistItem[]>({
     queryKey: ['watchlist'],
     queryFn: fetchWatchlist,
+    // 탭 전환으로 컴포넌트가 다시 마운트될 때마다 새로 조회
+    refetchOnMount: 'always',
+    staleTime: 0,
   })
 
   const [code, setCode] = useState('')
@@ -43,9 +46,19 @@ export default function Watchlist() {
 
   return (
     <div className="bg-gray-800 rounded-xl p-4">
-      <h2 className="text-lg font-bold text-white mb-3">
-        관심 종목 <span className="text-sm text-gray-400">({items.length}개)</span>
-      </h2>
+      <div className="flex items-center justify-between mb-3">
+        <h2 className="text-lg font-bold text-white">
+          관심 종목 <span className="text-sm text-gray-400">({items.length}개)</span>
+          {isFetching && <span className="text-xs text-gray-500 ml-2">갱신 중…</span>}
+        </h2>
+        <button
+          onClick={() => qc.invalidateQueries({ queryKey: ['watchlist'] })}
+          disabled={isFetching}
+          className="text-xs px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 text-gray-200 disabled:opacity-50"
+        >
+          새로고침
+        </button>
+      </div>
       <p className="text-xs text-gray-400 mb-3">
         여기에 등록한 종목은 스크리닝 후보와 함께 매수 조건(양봉 + 고점 50% ↓ / 전 차수 90% ↓)을 평가받아 자동 주문됩니다.
       </p>
@@ -74,35 +87,61 @@ export default function Watchlist() {
       ) : items.length === 0 ? (
         <p className="text-gray-500 text-sm">등록된 관심종목이 없습니다.</p>
       ) : (
-        <table className="w-full text-sm text-gray-300">
-          <thead>
-            <tr className="text-gray-400 border-b border-gray-700">
-              <th className="py-1 px-2 text-left">종목명</th>
-              <th className="py-1 px-2 text-left">코드</th>
-              <th className="py-1 px-2 text-left hidden md:table-cell">등록일</th>
-              <th className="py-1 px-2 text-right">관리</th>
-            </tr>
-          </thead>
-          <tbody>
-            {items.map(w => (
-              <tr key={w.stock_code} className="border-b border-gray-700">
-                <td className="py-1 px-2 font-medium text-white">{w.stock_name}</td>
-                <td className="py-1 px-2 text-gray-400">{w.stock_code}</td>
-                <td className="py-1 px-2 text-gray-500 text-xs hidden md:table-cell">
-                  {new Date(w.added_at).toLocaleDateString()}
-                </td>
-                <td className="py-1 px-2 text-right">
-                  <button
-                    onClick={() => handleRemove(w.stock_code)}
-                    className="text-xs px-2 py-0.5 rounded bg-red-900 hover:bg-red-800 text-red-200"
-                  >
-                    제거
-                  </button>
-                </td>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm text-gray-300">
+            <thead>
+              <tr className="text-gray-400 border-b border-gray-700">
+                {['종목명', '현재가', '고점', '고점대비%', '저점상승배수', '순이익(억)', '영업이익(억)', '외국인%', '시가총액(억)', '등록일', ''].map(h => (
+                  <th key={h} className="py-2 px-2 text-right first:text-left">{h}</th>
+                ))}
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {items.map(w => (
+                <tr key={w.stock_code} className="border-b border-gray-700 hover:bg-gray-700">
+                  <td className="py-2 px-2">
+                    <span className="font-medium text-white">{w.stock_name}</span>
+                    <span className="ml-1 text-xs text-gray-500">{w.stock_code}</span>
+                    {w.error && (
+                      <div className="text-[10px] text-red-400 mt-0.5" title={w.error}>
+                        조회 실패
+                      </div>
+                    )}
+                  </td>
+                  <td className="py-2 px-2 text-right">
+                    {w.current_price > 0 ? w.current_price.toLocaleString() : '—'}
+                  </td>
+                  <td className="py-2 px-2 text-right">
+                    {w.high_1y > 0 ? w.high_1y.toLocaleString() : '—'}
+                  </td>
+                  <td className="py-2 px-2 text-right text-blue-400 font-bold">
+                    {w.drop_from_high > 0 ? `-${w.drop_from_high.toFixed(1)}%` : '—'}
+                  </td>
+                  <td className="py-2 px-2 text-right">
+                    {w.rise_from_low > 0 ? `${w.rise_from_low.toFixed(2)}x` : '—'}
+                  </td>
+                  <td className="py-2 px-2 text-right">{w.net_income.toFixed(0)}</td>
+                  <td className="py-2 px-2 text-right">{w.operating_income.toFixed(0)}</td>
+                  <td className="py-2 px-2 text-right">{w.foreign_ratio.toFixed(1)}%</td>
+                  <td className="py-2 px-2 text-right">
+                    {w.market_cap > 0 ? (w.market_cap / 100_000_000).toFixed(0) : '—'}
+                  </td>
+                  <td className="py-2 px-2 text-right text-gray-500 text-xs">
+                    {new Date(w.added_at).toLocaleDateString()}
+                  </td>
+                  <td className="py-2 px-2 text-right">
+                    <button
+                      onClick={() => handleRemove(w.stock_code)}
+                      className="text-xs px-2 py-0.5 rounded bg-red-900 hover:bg-red-800 text-red-200"
+                    >
+                      제거
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
     </div>
   )

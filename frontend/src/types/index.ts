@@ -47,6 +47,16 @@ export interface WatchlistItem {
   stock_code: string
   stock_name: string
   added_at: string
+  current_price: number
+  high_1y: number
+  low_1y: number
+  market_cap: number
+  net_income: number           // 억원
+  operating_income: number     // 억원
+  foreign_ratio: number        // %
+  drop_from_high: number       // %
+  rise_from_low: number        // 배수
+  error: string | null
 }
 
 export interface OrderRecord {
