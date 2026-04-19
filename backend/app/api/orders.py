@@ -14,6 +14,7 @@ from app.db.user_config import (
 )
 from app.core.kiwoom_client import get_or_create_user_client
 from app.strategy.executor import calc_buy_qty
+from app.strategy.guards import check_buy_guards
 from app.strategy.screener import run_screening
 from app.strategy.signal import detect_buy_signals
 
@@ -42,6 +43,20 @@ async def manual_order(
             detail="keys_not_configured",
         )
     client = get_or_create_user_client(user.id, cfg)
+
+    # 매수 주문이면 리스크 가드 검사 — 위반 시 422 로 차단 사유 반환.
+    if req.order_type == "buy":
+        deny = await check_buy_guards(
+            db=db, user_id=user.id, cfg=cfg,
+            stock_code=req.stock_code,
+            price=req.price, qty=req.quantity, client=client,
+        )
+        if deny is not None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={"code": f"guard_{deny.reason_code}", "message": deny.message},
+            )
+
     resp = await client.place_order(
         stock_code=req.stock_code,
         order_type=req.order_type,

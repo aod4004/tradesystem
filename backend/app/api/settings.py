@@ -303,3 +303,72 @@ async def kakao_disconnect(
     await notifier.clear_tokens(user.id)
     cfg = await _load_cfg(db, user.id)
     return _build_status(cfg)
+
+
+# ====================================================================== #
+#  런타임 리스크 가드 설정 (Phase 4)
+# ====================================================================== #
+
+class RiskGuardsStatus(BaseModel):
+    enabled: bool
+    daily_order_amount_limit: float | None = None
+    daily_order_count_limit: int | None = None
+    max_position_ratio: float | None = None
+    # 기본값 (UI 에서 placeholder 로 보여주기 위함)
+    default_max_position_ratio: float
+
+
+class RiskGuardsPayload(BaseModel):
+    enabled: bool | None = None
+    daily_order_amount_limit: float | None = Field(default=None, ge=0)
+    daily_order_count_limit: int | None = Field(default=None, ge=0)
+    max_position_ratio: float | None = Field(default=None, ge=0, le=1)
+    # 해당 필드를 None 으로 명시적으로 리셋할 때 쓰는 플래그
+    clear_amount: bool = False
+    clear_count: bool = False
+    clear_ratio: bool = False
+
+
+def _build_risk_status(cfg: UserTradingConfig | None) -> RiskGuardsStatus:
+    return RiskGuardsStatus(
+        enabled=bool(cfg.risk_guards_enabled) if cfg else True,
+        daily_order_amount_limit=cfg.daily_order_amount_limit if cfg else None,
+        daily_order_count_limit=cfg.daily_order_count_limit if cfg else None,
+        max_position_ratio=cfg.max_position_ratio if cfg else None,
+        default_max_position_ratio=settings.MAX_POSITION_RATIO,
+    )
+
+
+@router.get("/risk-guards", response_model=RiskGuardsStatus)
+async def get_risk_guards(
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    cfg = await _load_cfg(db, user.id)
+    return _build_risk_status(cfg)
+
+
+@router.patch("/risk-guards", response_model=RiskGuardsStatus)
+async def update_risk_guards(
+    payload: RiskGuardsPayload,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    cfg = await _get_or_create_config(db, user.id)
+    if payload.enabled is not None:
+        cfg.risk_guards_enabled = payload.enabled
+    if payload.clear_amount:
+        cfg.daily_order_amount_limit = None
+    elif payload.daily_order_amount_limit is not None:
+        cfg.daily_order_amount_limit = payload.daily_order_amount_limit
+    if payload.clear_count:
+        cfg.daily_order_count_limit = None
+    elif payload.daily_order_count_limit is not None:
+        cfg.daily_order_count_limit = payload.daily_order_count_limit
+    if payload.clear_ratio:
+        cfg.max_position_ratio = None
+    elif payload.max_position_ratio is not None:
+        cfg.max_position_ratio = payload.max_position_ratio
+    await db.commit()
+    await db.refresh(cfg)
+    return _build_risk_status(cfg)

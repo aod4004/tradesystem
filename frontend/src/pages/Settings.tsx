@@ -8,9 +8,12 @@ import {
   fetchKakaoAuthorizeUrl,
   fetchKakaoStatus,
   fetchKiwoomStatus,
+  fetchRiskGuards,
   KakaoStatus,
   KiwoomKeysStatus,
+  RiskGuardsStatus,
   saveKiwoomKeys,
+  saveRiskGuards,
   sendKakaoTest,
   setKakaoEnabled,
 } from '../api/client'
@@ -35,7 +38,24 @@ export default function Settings() {
   const [kakaoMsg, setKakaoMsg] = useState<string | null>(null)
   const [kakaoErr, setKakaoErr] = useState<string | null>(null)
 
+  // ── 리스크 가드 상태 ────────────────────────────────────────
+  const [risk, setRisk] = useState<RiskGuardsStatus | null>(null)
+  const [riskAmount, setRiskAmount] = useState<string>('')
+  const [riskCount, setRiskCount] = useState<string>('')
+  const [riskRatioPct, setRiskRatioPct] = useState<string>('')
+  const [riskBusy, setRiskBusy] = useState(false)
+  const [riskMsg, setRiskMsg] = useState<string | null>(null)
+  const [riskErr, setRiskErr] = useState<string | null>(null)
+
   const refreshKakao = () => fetchKakaoStatus().then(setKakao).catch(() => {})
+  const refreshRisk = () => fetchRiskGuards().then(r => {
+    setRisk(r)
+    setRiskAmount(r.daily_order_amount_limit != null ? String(r.daily_order_amount_limit) : '')
+    setRiskCount(r.daily_order_count_limit != null ? String(r.daily_order_count_limit) : '')
+    setRiskRatioPct(
+      r.max_position_ratio != null ? String(Math.round(r.max_position_ratio * 1000) / 10) : '',
+    )
+  }).catch(() => {})
 
   useEffect(() => {
     fetchKiwoomStatus().then(s => {
@@ -44,6 +64,7 @@ export default function Settings() {
       if (s.total_investment > 0) setTotalInvest(String(s.total_investment))
     }).catch(() => {})
     refreshKakao()
+    refreshRisk()
   }, [])
 
   // 카카오 OAuth 콜백 복귀 처리
@@ -125,6 +146,41 @@ export default function Settings() {
       setErr(String(e?.response?.data?.detail ?? e?.message ?? e))
     } finally {
       setBusy(false)
+    }
+  }
+
+  // ── 리스크 가드 핸들러 ───────────────────────────────────────
+  const onToggleRisk = async (enabled: boolean) => {
+    setRiskBusy(true); setRiskMsg(null); setRiskErr(null)
+    try {
+      const r = await saveRiskGuards({ enabled })
+      setRisk(r)
+    } catch (e: any) {
+      setRiskErr(String(e?.response?.data?.detail ?? e?.message ?? e))
+    } finally {
+      setRiskBusy(false)
+    }
+  }
+
+  const onSaveRisk = async (e: FormEvent) => {
+    e.preventDefault()
+    setRiskBusy(true); setRiskMsg(null); setRiskErr(null)
+    try {
+      const body: any = {}
+      // 빈 문자열 → clear_* 플래그로 보내 한도 해제
+      if (riskAmount.trim() === '') body.clear_amount = true
+      else body.daily_order_amount_limit = Number(riskAmount)
+      if (riskCount.trim() === '') body.clear_count = true
+      else body.daily_order_count_limit = Number(riskCount)
+      if (riskRatioPct.trim() === '') body.clear_ratio = true
+      else body.max_position_ratio = Number(riskRatioPct) / 100
+      const r = await saveRiskGuards(body)
+      setRisk(r)
+      setRiskMsg('저장되었습니다.')
+    } catch (e: any) {
+      setRiskErr(String(e?.response?.data?.detail ?? e?.message ?? e))
+    } finally {
+      setRiskBusy(false)
     }
   }
 
@@ -279,6 +335,59 @@ export default function Settings() {
               {kakao.refresh_expires_at && ` · 리프레시 만료: ${new Date(kakao.refresh_expires_at).toLocaleString()}`}
             </p>
           )}
+        </section>
+
+        {/* 런타임 리스크 가드 --------------------------------------- */}
+        <section className="bg-gray-800 rounded-xl p-5 mb-6">
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="text-lg font-semibold">주문 리스크 가드</h2>
+            <label className="inline-flex items-center gap-2 text-sm text-gray-300">
+              <input type="checkbox" checked={!!risk?.enabled}
+                onChange={e => onToggleRisk(e.target.checked)} disabled={riskBusy || !risk} />
+              가드 사용
+            </label>
+          </div>
+          <p className="text-sm text-gray-400 mb-4">
+            매수 주문 전 자동 체크로 사고를 방지합니다. 위반 시 주문이 차단되고 카카오톡으로 사유가 전송됩니다.
+            <br />빈 값으로 저장하면 해당 한도 없음. 매도 주문에는 적용되지 않습니다.
+          </p>
+
+          <form onSubmit={onSaveRisk} className="space-y-3">
+            <label className="block">
+              <span className="text-sm text-gray-400">일일 매수 금액 한도 (원)</span>
+              <input type="number" min="0" step="100000" value={riskAmount}
+                onChange={e => setRiskAmount(e.target.value)}
+                placeholder="예: 2000000 (비우면 제한 없음)"
+                className="mt-1 w-full bg-gray-900 border border-gray-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-blue-400" />
+            </label>
+            <label className="block">
+              <span className="text-sm text-gray-400">일일 매수 건수 한도</span>
+              <input type="number" min="0" step="1" value={riskCount}
+                onChange={e => setRiskCount(e.target.value)}
+                placeholder="예: 10 (비우면 제한 없음)"
+                className="mt-1 w-full bg-gray-900 border border-gray-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-blue-400" />
+            </label>
+            <label className="block">
+              <span className="text-sm text-gray-400">
+                종목당 투자한도 비율 (%)
+                {risk && (
+                  <span className="text-gray-500"> · 기본 {(risk.default_max_position_ratio * 100).toFixed(1)}%</span>
+                )}
+              </span>
+              <input type="number" min="0" max="100" step="0.1" value={riskRatioPct}
+                onChange={e => setRiskRatioPct(e.target.value)}
+                placeholder={risk ? `예: ${(risk.default_max_position_ratio * 100).toFixed(1)} (비우면 기본값 사용)` : ''}
+                className="mt-1 w-full bg-gray-900 border border-gray-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-blue-400" />
+            </label>
+
+            {riskMsg && <p className="text-sm text-emerald-400">{riskMsg}</p>}
+            {riskErr && <p className="text-sm text-red-400">{riskErr}</p>}
+
+            <button type="submit" disabled={riskBusy}
+              className="bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 rounded px-4 py-2 text-sm font-medium">
+              {riskBusy ? '저장 중...' : '가드 설정 저장'}
+            </button>
+          </form>
         </section>
 
         {/* 회원 탈퇴 ------------------------------------------------ */}

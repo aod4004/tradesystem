@@ -53,6 +53,11 @@ class UserTradingConfig(Base):
     kakao_access_expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     kakao_refresh_expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     notifications_enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+    # 런타임 리스크 가드 (Phase 4) — None = 제한 없음 / 기본값 사용
+    daily_order_amount_limit: Mapped[float | None] = mapped_column(Float, nullable=True)
+    daily_order_count_limit: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    max_position_ratio: Mapped[float | None] = mapped_column(Float, nullable=True)
+    risk_guards_enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, onupdate=datetime.utcnow,
     )

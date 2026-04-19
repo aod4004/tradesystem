@@ -17,7 +17,8 @@ from app.db.models import (
     Position, Order, BuySignal,
     OrderType, OrderStatus,
 )
-from app.db.user_config import get_total_investment
+from app.db.user_config import get_total_investment, get_trading_config
+from app.strategy.guards import check_buy_guards, GuardDenied
 
 
 async def execute_pending_buy_orders(
@@ -25,6 +26,7 @@ async def execute_pending_buy_orders(
 ):
     """장 시작 전(08:50) — 해당 유저의 전날 감지된 매수 신호를 지정가 주문으로 전송"""
     total_invest = await get_total_investment(db, user_id)
+    cfg = await get_trading_config(db, user_id)
     signals = (
         await db.execute(
             select(BuySignal).where(
@@ -51,6 +53,24 @@ async def execute_pending_buy_orders(
                 db, user_id, sig.stock_code, OrderType.BUY, sig.trigger_round
             ):
                 print(f"[executor] {sig.stock_code} {sig.trigger_round}차 매수 주문 이미 진행중 — 스킵")
+                sig.is_executed = True
+                await db.commit()
+                continue
+
+            deny = await check_buy_guards(
+                db=db, user_id=user_id, cfg=cfg,
+                stock_code=sig.stock_code,
+                price=sig.target_order_price, qty=qty, client=client,
+            )
+            if deny is not None:
+                print(f"[executor] 🛑 {sig.stock_code} {sig.trigger_round}차 매수 차단 — {deny.reason_code}: {deny.message}")
+                _notify_guard_block(
+                    user_id, sig.stock_name or sig.stock_code, sig.stock_code,
+                    f"{sig.trigger_round}차 {qty}주 @ {sig.target_order_price:,}원",
+                    deny,
+                )
+                # 같은 신호를 다음날 같은 가격으로 재시도하지 않도록 executed 처리.
+                # 유저는 한도 조정 후 수동 주문으로 재시도 가능.
                 sig.is_executed = True
                 await db.commit()
                 continue
@@ -200,6 +220,22 @@ async def execute_extra_buy_order(
     if qty <= 0:
         return False
 
+    cfg = await get_trading_config(db, position.user_id)
+    deny = await check_buy_guards(
+        db=db, user_id=position.user_id, cfg=cfg,
+        stock_code=position.stock_code,
+        price=current_price, qty=qty, client=client,
+    )
+    if deny is not None:
+        print(f"[executor] 🛑 추가매수 차단 {position.stock_code} — {deny.reason_code}: {deny.message}")
+        _notify_guard_block(
+            position.user_id, position.stock_name, position.stock_code,
+            f"추가매수 {qty}주 @ {current_price:,}원", deny,
+        )
+        # extra_buy_low 를 건드리지 않음 — 다음 tick 에도 같은 조건이면 가드가 또 차단.
+        # 유저가 한도를 늘리면 즉시 재시도 가능.
+        return False
+
     try:
         resp = await client.place_order(
             stock_code=position.stock_code,
@@ -275,3 +311,16 @@ def calc_buy_qty(price: int, total_investment: float) -> int:
         return 0
     buy_amount = total_investment * settings.BUY_RATIO_PER_ROUND
     return int(buy_amount // price)
+
+
+def _notify_guard_block(
+    user_id: int, stock_name: str, stock_code: str, detail: str, deny: GuardDenied,
+) -> None:
+    """리스크 가드로 주문이 차단됐을 때 유저에게 알림 — dedup 은 사유×종목×날짜."""
+    from datetime import datetime as _dt
+    today = _dt.utcnow().strftime("%Y-%m-%d")
+    notify_user_fire(
+        user_id,
+        f"🛑 매수 주문 차단 (리스크 가드)\n{stock_name} ({stock_code})\n{detail}\n사유: {deny.message}",
+        dedup_key=f"guard:{deny.reason_code}:{stock_code}:{today}",
+    )

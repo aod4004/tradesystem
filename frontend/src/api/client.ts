@@ -76,6 +76,31 @@ export const deleteKiwoomKeys = () =>
 export const deleteAccount = (password: string) =>
   api.delete('/auth/me', { data: { password } }).then(r => r.data)
 
+// 런타임 리스크 가드 (Phase 4)
+export interface RiskGuardsStatus {
+  enabled: boolean
+  daily_order_amount_limit: number | null
+  daily_order_count_limit: number | null
+  max_position_ratio: number | null
+  default_max_position_ratio: number
+}
+
+export interface RiskGuardsPayload {
+  enabled?: boolean
+  daily_order_amount_limit?: number | null
+  daily_order_count_limit?: number | null
+  max_position_ratio?: number | null
+  clear_amount?: boolean
+  clear_count?: boolean
+  clear_ratio?: boolean
+}
+
+export const fetchRiskGuards = () =>
+  api.get<RiskGuardsStatus>('/settings/risk-guards').then(r => r.data)
+
+export const saveRiskGuards = (body: RiskGuardsPayload) =>
+  api.patch<RiskGuardsStatus>('/settings/risk-guards', body).then(r => r.data)
+
 // 카카오 알림 연동
 export interface KakaoStatus {
   configured: boolean
