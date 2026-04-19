@@ -120,11 +120,11 @@ export default function Watchlist() {
                   <td className="py-2 px-2 text-right">
                     {w.rise_from_low > 0 ? `${w.rise_from_low.toFixed(2)}x` : '—'}
                   </td>
-                  <td className="py-2 px-2 text-right">{w.net_income.toFixed(0)}</td>
-                  <td className="py-2 px-2 text-right">{w.operating_income.toFixed(0)}</td>
+                  <td className="py-2 px-2 text-right">{Math.round(w.net_income).toLocaleString()}</td>
+                  <td className="py-2 px-2 text-right">{Math.round(w.operating_income).toLocaleString()}</td>
                   <td className="py-2 px-2 text-right">{w.foreign_ratio.toFixed(1)}%</td>
                   <td className="py-2 px-2 text-right">
-                    {w.market_cap > 0 ? (w.market_cap / 100_000_000).toFixed(0) : '—'}
+                    {w.market_cap > 0 ? Math.round(w.market_cap / 100_000_000).toLocaleString() : '—'}
                   </td>
                   <td className="py-2 px-2 text-right text-gray-500 text-xs">
                     {new Date(w.added_at).toLocaleDateString()}

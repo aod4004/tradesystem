@@ -36,10 +36,10 @@ export default function ScreeningTable() {
                 <td className="py-2 px-2 text-right">{s.high_1y.toLocaleString()}</td>
                 <td className="py-2 px-2 text-right text-blue-400 font-bold">-{s.drop_from_high.toFixed(1)}%</td>
                 <td className="py-2 px-2 text-right">{s.rise_from_low.toFixed(2)}x</td>
-                <td className="py-2 px-2 text-right">{s.net_income.toFixed(0)}</td>
-                <td className="py-2 px-2 text-right">{s.operating_income.toFixed(0)}</td>
+                <td className="py-2 px-2 text-right">{Math.round(s.net_income).toLocaleString()}</td>
+                <td className="py-2 px-2 text-right">{Math.round(s.operating_income).toLocaleString()}</td>
                 <td className="py-2 px-2 text-right">{s.foreign_ratio.toFixed(1)}%</td>
-                <td className="py-2 px-2 text-right">{(s.market_cap / 100_000_000).toFixed(0)}</td>
+                <td className="py-2 px-2 text-right">{Math.round(s.market_cap / 100_000_000).toLocaleString()}</td>
               </tr>
             ))}
           </tbody>
