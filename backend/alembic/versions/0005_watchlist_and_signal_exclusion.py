@@ -4,9 +4,11 @@
 positions.stock_code / buy_signals.stock_code 의 FK(→ screened_stocks.code)를 드롭.
 참조 무결성은 애플리케이션 레이어에서 보장.
 
-Revision ID: 0005_watchlist_and_signal_exclusion
+Revision ID: 0005_watchlist_exclusion
 Revises: 0004_sell_trigger_bitmask
 Create Date: 2026-04-19
+
+주의: revision ID 는 alembic_version.version_num VARCHAR(32) 제약에 맞춰 짧게 유지.
 """
 from typing import Sequence, Union
 
@@ -14,7 +16,7 @@ from alembic import op
 import sqlalchemy as sa
 
 
-revision: str = "0005_watchlist_and_signal_exclusion"
+revision: str = "0005_watchlist_exclusion"
 down_revision: Union[str, None] = "0004_sell_trigger_bitmask"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
