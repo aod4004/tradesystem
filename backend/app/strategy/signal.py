@@ -16,6 +16,7 @@ from sqlalchemy import select
 
 from app.config import settings
 from app.core.kiwoom_client import KiwoomClient, to_int
+from app.core.notifier import notify_user_fire
 from app.db.models import (
     ScreenedStock, Position, BuySignal, PositionStatus, UserWatchlist,
 )
@@ -99,6 +100,22 @@ async def detect_buy_signals(
             print(f"[signal] {cand.code} (user={user_id}) 신호 확인 오류: {e}")
 
     await db.commit()
+
+    # 알림: 당일 감지된 신호가 있으면 요약 1건 발송
+    if signals:
+        lines = [f"🔔 내일 매수 예정 {len(signals)}건"]
+        for s in signals[:10]:
+            lines.append(
+                f"· {s.stock_name or s.stock_code} ({s.stock_code}) "
+                f"{s.trigger_round}차 {s.target_order_price:,}원"
+            )
+        if len(signals) > 10:
+            lines.append(f"… 외 {len(signals) - 10}건")
+        notify_user_fire(
+            user_id, "\n".join(lines),
+            dedup_key=f"signal_summary:{datetime.utcnow().date().isoformat()}",
+        )
+
     return signals
 
 

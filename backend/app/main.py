@@ -1,14 +1,16 @@
 import os
 from contextlib import asynccontextmanager
 
+import redis.asyncio as aioredis
 from fastapi import FastAPI, Query, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 from app.auth import authenticate_websocket, hash_password
 from app.config import settings
-from app.core.kiwoom_client import close_all_user_clients
+from app.core.kiwoom_client import close_all_user_clients, get_kiwoom_client
+from app.core.notifier import notifier as kakao_notifier
 from app.db.database import AsyncSessionLocal
 from app.db.models import User, UserTradingConfig
 from app.api import (
@@ -76,6 +78,7 @@ async def lifespan(app: FastAPI):
     scheduler.shutdown()
     await kiwoom_pool.stop()
     await close_all_user_clients()
+    await kakao_notifier.close()
     print("[main] 서버 종료")
 
 
@@ -111,7 +114,53 @@ async def websocket_endpoint(websocket: WebSocket, token: str | None = Query(def
 
 @app.get("/api/health")
 async def health():
-    return {"status": "ok"}
+    """컴포넌트별 상태 — DB / Redis / 키움 시스템 토큰 / 키움 WS 풀."""
+    components: dict[str, dict] = {}
+
+    # DB ----
+    try:
+        async with AsyncSessionLocal() as db:
+            await db.execute(text("SELECT 1"))
+        components["db"] = {"ok": True}
+    except Exception as e:
+        components["db"] = {"ok": False, "error": str(e)}
+
+    # Redis ----
+    try:
+        r = await aioredis.from_url(settings.REDIS_URL)
+        pong = await r.ping()
+        await r.aclose()
+        components["redis"] = {"ok": bool(pong)}
+    except Exception as e:
+        components["redis"] = {"ok": False, "error": str(e)}
+
+    # 키움 시스템 토큰 (env 키) ----
+    kiwoom_info: dict = {"ok": False}
+    if settings.KIWOOM_APP_KEY and settings.KIWOOM_SECRET_KEY:
+        try:
+            client = get_kiwoom_client()
+            token = await client.get_token()
+            kiwoom_info = {"ok": bool(token), "mock": settings.KIWOOM_MOCK}
+        except Exception as e:
+            kiwoom_info = {"ok": False, "error": str(e)}
+    else:
+        kiwoom_info = {"ok": False, "error": "system keys not configured"}
+    components["kiwoom_system"] = kiwoom_info
+
+    # 키움 WS 풀 ----
+    components["kiwoom_ws_pool"] = {
+        "ok": True,
+        "connections": len(kiwoom_pool._connections),
+        "users": sorted(kiwoom_pool._connections.keys()),
+    }
+
+    # 알림(카카오) ----
+    components["kakao"] = {
+        "configured": bool(settings.KAKAO_REST_API_KEY and settings.KAKAO_REDIRECT_URI),
+    }
+
+    overall = all(v.get("ok", True) for v in components.values() if isinstance(v, dict))
+    return {"status": "ok" if overall else "degraded", "components": components}
 
 
 # 정적 파일 서빙 (API/WS 등록 후 마지막에 마운트)

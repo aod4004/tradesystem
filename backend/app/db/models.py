@@ -47,6 +47,12 @@ class UserTradingConfig(Base):
     kiwoom_app_key: Mapped[str | None] = mapped_column(String(200), nullable=True)
     kiwoom_secret_key: Mapped[str | None] = mapped_column(String(200), nullable=True)
     kiwoom_mock: Mapped[bool] = mapped_column(Boolean, default=True)
+    # 카카오톡 "나에게 보내기" OAuth 토큰 (Phase 3)
+    kakao_access_token: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    kakao_refresh_token: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    kakao_access_expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    kakao_refresh_expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    notifications_enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, onupdate=datetime.utcnow,
     )

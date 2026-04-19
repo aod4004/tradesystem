@@ -12,6 +12,7 @@ from sqlalchemy import select
 
 from app.config import settings
 from app.core.kiwoom_client import KiwoomClient
+from app.core.notifier import notify_user_fire
 from app.db.models import (
     Position, Order, BuySignal,
     OrderType, OrderStatus,
@@ -79,9 +80,21 @@ async def execute_pending_buy_orders(
             await db.commit()
 
             print(f"[executor] 매수 주문 전송: {sig.stock_code} {qty}주 @{sig.target_order_price:,}원 ({sig.trigger_round}차, {sig.source}) ord_no={order_no}")
+            notify_user_fire(
+                user_id,
+                f"📝 매수 주문 접수\n{sig.stock_name or sig.stock_code} ({sig.stock_code})\n"
+                f"{sig.trigger_round}차 · {qty}주 @ {sig.target_order_price:,}원",
+                dedup_key=f"order_buy:{order_no}" if order_no else None,
+            )
 
         except Exception as e:
             print(f"[executor] 매수 주문 오류 ({sig.stock_code}): {e}")
+            notify_user_fire(
+                user_id,
+                f"❌ 매수 주문 실패\n{sig.stock_name or sig.stock_code} ({sig.stock_code}) "
+                f"{sig.trigger_round}차\n사유: {e}",
+                dedup_key=f"order_buy_fail:{sig.stock_code}:{sig.trigger_round}",
+            )
 
 
 async def execute_sell_order(
@@ -129,10 +142,27 @@ async def execute_sell_order(
         await db.commit()
 
         print(f"[executor] 매도 주문 전송: {position.stock_code} {sell_qty}주 @{current_price:,}원 (tranche {sell_round}, trigger bit {trigger_bit}) ord_no={order_no}")
+        gain_rate = (
+            (current_price - position.avg_buy_price) / position.avg_buy_price * 100
+            if position.avg_buy_price > 0 else 0.0
+        )
+        notify_user_fire(
+            position.user_id,
+            f"📤 매도 주문 접수\n{position.stock_name} ({position.stock_code})\n"
+            f"tranche {sell_round}/5 · {sell_qty}주 @ {current_price:,}원\n"
+            f"평단 {position.avg_buy_price:,.0f}원 · {gain_rate:+.2f}%",
+            dedup_key=f"order_sell:{order_no}" if order_no else None,
+        )
         return True
 
     except Exception as e:
         print(f"[executor] 매도 주문 오류 ({position.stock_code}): {e}")
+        notify_user_fire(
+            position.user_id,
+            f"❌ 매도 주문 실패\n{position.stock_name} ({position.stock_code}) "
+            f"tranche {sell_round}\n사유: {e}",
+            dedup_key=f"order_sell_fail:{position.stock_code}:{trigger_bit}",
+        )
         return False
 
 
@@ -197,10 +227,21 @@ async def execute_extra_buy_order(
         await db.commit()
 
         print(f"[executor] 추가 매수 주문 전송: {position.stock_code} {qty}주 @{current_price:,}원 ord_no={order_no}")
+        notify_user_fire(
+            position.user_id,
+            f"♻️ 추가 매수 주문 접수\n{position.stock_name} ({position.stock_code})\n"
+            f"{qty}주 @ {current_price:,}원",
+            dedup_key=f"order_extra:{order_no}" if order_no else None,
+        )
         return True
 
     except Exception as e:
         print(f"[executor] 추가 매수 오류 ({position.stock_code}): {e}")
+        notify_user_fire(
+            position.user_id,
+            f"❌ 추가 매수 실패\n{position.stock_name} ({position.stock_code})\n사유: {e}",
+            dedup_key=f"order_extra_fail:{position.stock_code}",
+        )
         return False
 
 

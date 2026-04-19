@@ -76,6 +76,30 @@ export const deleteKiwoomKeys = () =>
 export const deleteAccount = (password: string) =>
   api.delete('/auth/me', { data: { password } }).then(r => r.data)
 
+// 카카오 알림 연동
+export interface KakaoStatus {
+  configured: boolean
+  connected: boolean
+  notifications_enabled: boolean
+  access_expires_at: string | null
+  refresh_expires_at: string | null
+}
+
+export const fetchKakaoStatus = () =>
+  api.get<KakaoStatus>('/settings/kakao').then(r => r.data)
+
+export const fetchKakaoAuthorizeUrl = () =>
+  api.get<{ url: string }>('/settings/kakao/authorize-url').then(r => r.data)
+
+export const sendKakaoTest = () =>
+  api.post<{ ok: boolean }>('/settings/kakao/test').then(r => r.data)
+
+export const setKakaoEnabled = (enabled: boolean) =>
+  api.patch<KakaoStatus>('/settings/kakao/enabled', { enabled }).then(r => r.data)
+
+export const disconnectKakao = () =>
+  api.delete<KakaoStatus>('/settings/kakao').then(r => r.data)
+
 // 관심 종목
 export const fetchWatchlist = () =>
   api.get<WatchlistItem[]>('/watchlist').then(r => r.data)

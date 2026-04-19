@@ -1,17 +1,24 @@
 import { FormEvent, useEffect, useState } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import {
   deleteAccount,
   deleteKiwoomKeys,
+  disconnectKakao,
+  fetchKakaoAuthorizeUrl,
+  fetchKakaoStatus,
   fetchKiwoomStatus,
+  KakaoStatus,
   KiwoomKeysStatus,
   saveKiwoomKeys,
+  sendKakaoTest,
+  setKakaoEnabled,
 } from '../api/client'
 
 export default function Settings() {
   const { user, logout } = useAuth()
   const navigate = useNavigate()
+  const [searchParams, setSearchParams] = useSearchParams()
 
   const [status, setStatus] = useState<KiwoomKeysStatus | null>(null)
   const [appKey, setAppKey] = useState('')
@@ -22,13 +29,87 @@ export default function Settings() {
   const [msg, setMsg] = useState<string | null>(null)
   const [err, setErr] = useState<string | null>(null)
 
+  // ── 카카오 알림 상태 ────────────────────────────────────────
+  const [kakao, setKakao] = useState<KakaoStatus | null>(null)
+  const [kakaoBusy, setKakaoBusy] = useState(false)
+  const [kakaoMsg, setKakaoMsg] = useState<string | null>(null)
+  const [kakaoErr, setKakaoErr] = useState<string | null>(null)
+
+  const refreshKakao = () => fetchKakaoStatus().then(setKakao).catch(() => {})
+
   useEffect(() => {
     fetchKiwoomStatus().then(s => {
       setStatus(s)
       setMock(s.mock)
       if (s.total_investment > 0) setTotalInvest(String(s.total_investment))
     }).catch(() => {})
+    refreshKakao()
   }, [])
+
+  // 카카오 OAuth 콜백 복귀 처리
+  useEffect(() => {
+    const result = searchParams.get('kakao')
+    if (!result) return
+    if (result === 'connected') {
+      setKakaoMsg('카카오톡 알림이 연동되었습니다.')
+      refreshKakao()
+    } else if (result === 'error') {
+      setKakaoErr(searchParams.get('reason') || '연동 실패')
+    }
+    // URL 정리
+    searchParams.delete('kakao')
+    searchParams.delete('reason')
+    setSearchParams(searchParams, { replace: true })
+  }, [searchParams, setSearchParams])
+
+  const onKakaoConnect = async () => {
+    setKakaoBusy(true); setKakaoMsg(null); setKakaoErr(null)
+    try {
+      const { url } = await fetchKakaoAuthorizeUrl()
+      window.location.href = url
+    } catch (e: any) {
+      setKakaoErr(String(e?.response?.data?.detail ?? e?.message ?? e))
+      setKakaoBusy(false)
+    }
+  }
+
+  const onKakaoTest = async () => {
+    setKakaoBusy(true); setKakaoMsg(null); setKakaoErr(null)
+    try {
+      await sendKakaoTest()
+      setKakaoMsg('카카오톡으로 테스트 메시지를 보냈습니다.')
+    } catch (e: any) {
+      setKakaoErr(String(e?.response?.data?.detail ?? e?.message ?? e))
+    } finally {
+      setKakaoBusy(false)
+    }
+  }
+
+  const onKakaoDisconnect = async () => {
+    if (!confirm('카카오 알림 연동을 해제할까요?')) return
+    setKakaoBusy(true); setKakaoMsg(null); setKakaoErr(null)
+    try {
+      const s = await disconnectKakao()
+      setKakao(s)
+      setKakaoMsg('연동이 해제되었습니다.')
+    } catch (e: any) {
+      setKakaoErr(String(e?.response?.data?.detail ?? e?.message ?? e))
+    } finally {
+      setKakaoBusy(false)
+    }
+  }
+
+  const onToggleNotifications = async (enabled: boolean) => {
+    setKakaoBusy(true); setKakaoErr(null)
+    try {
+      const s = await setKakaoEnabled(enabled)
+      setKakao(s)
+    } catch (e: any) {
+      setKakaoErr(String(e?.response?.data?.detail ?? e?.message ?? e))
+    } finally {
+      setKakaoBusy(false)
+    }
+  }
 
   const onSave = async (e: FormEvent) => {
     e.preventDefault()
@@ -143,6 +224,61 @@ export default function Settings() {
               )}
             </div>
           </form>
+        </section>
+
+        {/* 카카오톡 알림 -------------------------------------------- */}
+        <section className="bg-gray-800 rounded-xl p-5 mb-6">
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="text-lg font-semibold">카카오톡 알림 (나에게 보내기)</h2>
+            <span className={`text-xs px-2 py-0.5 rounded ${kakao?.connected ? 'bg-emerald-700 text-emerald-100' : 'bg-gray-700 text-gray-300'}`}>
+              {kakao?.connected ? '연동됨' : '미연동'}
+            </span>
+          </div>
+          <p className="text-sm text-gray-400 mb-4">
+            매수 신호·주문 접수·체결·취소·매도 조건 도달 알림이 본인 카카오톡 "나에게 보내기" 로 전송됩니다.
+            연동 시 카카오 로그인 및 <span className="text-gray-200">나에게 메시지 전송</span> 권한 동의가 필요합니다.
+          </p>
+
+          {kakao && !kakao.configured && (
+            <p className="text-sm text-amber-400 mb-3">
+              서버에 카카오 앱이 설정돼 있지 않습니다 (KAKAO_REST_API_KEY / KAKAO_REDIRECT_URI).
+            </p>
+          )}
+
+          {kakaoMsg && <p className="text-sm text-emerald-400 mb-2">{kakaoMsg}</p>}
+          {kakaoErr && <p className="text-sm text-red-400 mb-2">{kakaoErr}</p>}
+
+          <div className="flex flex-wrap gap-2">
+            {!kakao?.connected ? (
+              <button onClick={onKakaoConnect} disabled={kakaoBusy || !kakao?.configured}
+                className="bg-yellow-500 hover:bg-yellow-400 text-gray-900 disabled:bg-gray-600 disabled:text-gray-300 rounded px-4 py-2 text-sm font-medium">
+                {kakaoBusy ? '이동 중...' : '카카오톡 연동'}
+              </button>
+            ) : (
+              <>
+                <button onClick={onKakaoTest} disabled={kakaoBusy}
+                  className="bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 rounded px-4 py-2 text-sm font-medium">
+                  테스트 전송
+                </button>
+                <button onClick={onKakaoDisconnect} disabled={kakaoBusy}
+                  className="bg-gray-700 hover:bg-gray-600 rounded px-4 py-2 text-sm">
+                  연동 해제
+                </button>
+                <label className="inline-flex items-center gap-2 px-3 py-2 text-sm text-gray-300">
+                  <input type="checkbox" checked={kakao.notifications_enabled}
+                    onChange={e => onToggleNotifications(e.target.checked)} disabled={kakaoBusy} />
+                  알림 켜기
+                </label>
+              </>
+            )}
+          </div>
+
+          {kakao?.connected && kakao.access_expires_at && (
+            <p className="text-xs text-gray-500 mt-3">
+              액세스 토큰 만료: {new Date(kakao.access_expires_at).toLocaleString()}
+              {kakao.refresh_expires_at && ` · 리프레시 만료: ${new Date(kakao.refresh_expires_at).toLocaleString()}`}
+            </p>
+          )}
         </section>
 
         {/* 회원 탈퇴 ------------------------------------------------ */}

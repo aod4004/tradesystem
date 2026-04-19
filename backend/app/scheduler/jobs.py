@@ -10,6 +10,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
 from app.core.kiwoom_client import get_or_create_user_client
+from app.core.notifier import notify_admins_fire, notify_user_fire
 from app.db.database import AsyncSessionLocal
 from app.db.user_config import get_trading_config, list_trading_users
 from app.strategy.screener import run_screening
@@ -21,7 +22,15 @@ from app.strategy.ma20 import refresh_ma20_for_active_positions
 async def job_screening():
     print("[scheduler] 종목 스크리닝 시작")
     async with AsyncSessionLocal() as db:
-        await run_screening(db)
+        try:
+            await run_screening(db)
+        except Exception as e:
+            print(f"[scheduler] run_screening 실패: {e}")
+            notify_admins_fire(
+                f"🔥 스크리닝 작업 실패\n{type(e).__name__}: {e}",
+                dedup_key="scheduler_screening_error",
+            )
+            return
         users = await list_trading_users(db)
         total = 0
         skipped = 0
@@ -36,6 +45,11 @@ async def job_screening():
                 total += len(signals)
             except Exception as e:
                 print(f"[scheduler] 유저 {u.id} 신호 감지 실패: {e}")
+                notify_user_fire(
+                    u.id,
+                    f"⚠️ 매수 신호 감지 실패\n{type(e).__name__}: {e}",
+                    dedup_key=f"signal_detect_error:{u.id}",
+                )
         print(
             f"[scheduler] 유저 {len(users)}명 중 {len(users) - skipped}명 대상 "
             f"매수 신호 {total}건 생성 (키 미등록 {skipped}명 스킵)"
@@ -55,11 +69,23 @@ async def job_morning_orders():
                 await execute_pending_buy_orders(db, u.id, client)
             except Exception as e:
                 print(f"[scheduler] 유저 {u.id} 매수 실행 실패: {e}")
+                notify_user_fire(
+                    u.id,
+                    f"⚠️ 자동 매수 실행 실패\n{type(e).__name__}: {e}",
+                    dedup_key=f"morning_orders_error:{u.id}",
+                )
 
 
 async def job_refresh_ma20():
     print("[scheduler] MA 캐시 갱신")
-    await refresh_ma20_for_active_positions()
+    try:
+        await refresh_ma20_for_active_positions()
+    except Exception as e:
+        print(f"[scheduler] MA 캐시 갱신 실패: {e}")
+        notify_admins_fire(
+            f"🔥 MA 캐시 갱신 실패\n{type(e).__name__}: {e}",
+            dedup_key="ma_refresh_error",
+        )
 
 
 def create_scheduler() -> AsyncIOScheduler:

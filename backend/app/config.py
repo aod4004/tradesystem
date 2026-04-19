@@ -52,6 +52,11 @@ class Settings(BaseSettings):
     ADMIN_EMAIL: str = "admin@example.com"
     ADMIN_PASSWORD: str = "change_me_on_first_deploy"
 
+    # Notifications — 카카오톡 "나에게 보내기" (Phase 3)
+    KAKAO_REST_API_KEY: str = ""         # 카카오 디벨로퍼스 앱의 REST API 키 = OAuth client_id
+    KAKAO_CLIENT_SECRET: str = ""        # 카카오 콘솔에서 활성화한 경우만 (미사용이면 공란)
+    KAKAO_REDIRECT_URI: str = ""         # 예: https://<도메인>/api/settings/kakao/callback
+
     class Config:
         env_file = ".env"
         extra = "ignore"

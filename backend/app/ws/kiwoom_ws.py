@@ -29,12 +29,26 @@ from datetime import datetime
 import websockets
 from sqlalchemy import select
 
+from app.config import settings
 from app.core.kiwoom_client import KiwoomClient, to_int
+from app.core.notifier import notify_admins_fire, notify_user_fire
 from app.db.database import AsyncSessionLocal
 from app.db.models import Position, Order, OrderType, PositionStatus, OrderStatus
 from app.strategy.signal import check_sell_signal, check_extra_buy_signal
 from app.strategy.executor import execute_sell_order, execute_extra_buy_order
 from app.ws.manager import manager
+
+
+def _sell_trigger_label(bit: int) -> str:
+    """Position.sold_triggers / Order.sell_trigger_bit 비트를 사람이 읽을 라벨로."""
+    n_ratios = len(settings.SELL_RATIOS)
+    if 0 <= bit < n_ratios:
+        pct = int(settings.SELL_RATIOS[bit] * 100)
+        return f"수익률 +{pct}%"
+    ma_idx = bit - n_ratios
+    if 0 <= ma_idx < len(settings.SELL_MA_PERIODS):
+        return f"MA{settings.SELL_MA_PERIODS[ma_idx]} 터치"
+    return f"trigger bit {bit}"
 
 
 class UserKiwoomWS:
@@ -80,6 +94,11 @@ class UserKiwoomWS:
                 break
             except Exception as e:
                 print(f"[kiwoom_ws user={self.user_id}] 연결 오류: {e} — 5초 후 재연결")
+                notify_user_fire(
+                    self.user_id,
+                    f"⚠️ 키움 실시간 연결 오류\n{e}\n5초 후 재연결 시도합니다.",
+                    dedup_key=f"ws_error:{type(e).__name__}",
+                )
                 await asyncio.sleep(5)
 
     async def _run(self) -> None:
@@ -203,6 +222,9 @@ class UserKiwoomWS:
                 )
                 if decision:
                     sell_round, trigger_bit = decision
+                    gain_rate = round(
+                        (current_price - position.avg_buy_price) / position.avg_buy_price * 100, 2
+                    )
                     await manager.broadcast("sell_signal", {
                         "user_id": self.user_id,
                         "code": code,
@@ -210,10 +232,15 @@ class UserKiwoomWS:
                         "trigger_bit": trigger_bit,
                         "current_price": current_price,
                         "avg_buy_price": position.avg_buy_price,
-                        "gain_rate": round(
-                            (current_price - position.avg_buy_price) / position.avg_buy_price * 100, 2
-                        ),
+                        "gain_rate": gain_rate,
                     })
+                    trigger_label = _sell_trigger_label(trigger_bit)
+                    notify_user_fire(
+                        self.user_id,
+                        f"🎯 매도 조건 도달\n{position.stock_name} ({code})\n"
+                        f"{trigger_label} · 현재가 {current_price:,}원 ({gain_rate:+.2f}%)",
+                        dedup_key=f"sell_trigger:{position.id}:{trigger_bit}",
+                    )
                     await execute_sell_order(
                         db, position, sell_round, trigger_bit, current_price, self.client,
                     )
@@ -333,6 +360,39 @@ class UserKiwoomWS:
 
             await db.commit()
 
+            # 알림 — 완결된 체결이면 확정, 부분 체결이면 요약
+            is_final = order.status == OrderStatus.FILLED
+            stage = "체결 완료" if is_final else "부분 체결"
+            if order.order_type == OrderType.BUY:
+                lines = [
+                    f"✅ 매수 {stage}",
+                    f"{order.stock_name or order.stock_code} ({order.stock_code})",
+                    f"{qty}주 @ {price:,}원",
+                ]
+                if position is not None:
+                    lines.append(
+                        f"현재 {position.quantity}주 · 평단 {position.avg_buy_price:,.0f}원"
+                    )
+            else:
+                gain_rate = (
+                    (price - position.avg_buy_price) / position.avg_buy_price * 100
+                    if position and position.avg_buy_price > 0 else 0.0
+                )
+                trigger_label = _sell_trigger_label(order.sell_trigger_bit) if order.sell_trigger_bit is not None else ""
+                lines = [
+                    f"💰 매도 {stage}",
+                    f"{order.stock_name or order.stock_code} ({order.stock_code})",
+                    f"{qty}주 @ {price:,}원 ({gain_rate:+.2f}%)",
+                ]
+                if trigger_label:
+                    lines.append(trigger_label)
+                if position is not None and position.status == PositionStatus.CLOSED:
+                    lines.append("포지션 청산 완료")
+            notify_user_fire(
+                self.user_id, "\n".join(lines),
+                dedup_key=f"fill:{order_no}:{order.filled_qty}",
+            )
+
     async def _apply_cancel(self, order_no: str, state: str) -> None:
         async with AsyncSessionLocal() as db:
             order = (
@@ -348,6 +408,14 @@ class UserKiwoomWS:
             order.status = OrderStatus.CANCELLED
             await db.commit()
             print(f"[kiwoom_ws user={self.user_id}] 주문 {state}: ord_no={order_no} ({order.stock_code})")
+            side = "매수" if order.order_type == OrderType.BUY else "매도"
+            notify_user_fire(
+                self.user_id,
+                f"🚫 {side} 주문 {state}\n"
+                f"{order.stock_name or order.stock_code} ({order.stock_code})\n"
+                f"{order.order_qty}주 @ {order.order_price:,}원",
+                dedup_key=f"cancel:{order_no}",
+            )
 
     async def _on_balance_event(self, item: dict) -> None:
         values = item.get("values", {}) or {}
