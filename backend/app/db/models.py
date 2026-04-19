@@ -27,7 +27,7 @@ class ScreenedStock(Base):
     __tablename__ = "screened_stocks"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    code: Mapped[str] = mapped_column(String(10), index=True)
+    code: Mapped[str] = mapped_column(String(10), unique=True, index=True)
     name: Mapped[str] = mapped_column(String(50))
     market: Mapped[str] = mapped_column(String(10))          # KOSPI / KOSDAQ
 

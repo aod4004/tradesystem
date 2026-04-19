@@ -10,11 +10,13 @@ class Settings(BaseSettings):
 
     @property
     def KIWOOM_BASE_URL(self) -> str:
-        return "https://openapi.kiwoom.com"
+        return "https://mockapi.kiwoom.com" if self.KIWOOM_MOCK else "https://api.kiwoom.com"
 
     @property
     def KIWOOM_WS_URL(self) -> str:
-        return "wss://openapi.kiwoom.com/websocket"
+        # 키움 WebSocket은 10000 포트 사용
+        host = "mockapi.kiwoom.com" if self.KIWOOM_MOCK else "api.kiwoom.com"
+        return f"wss://{host}:10000/api/dostk/websocket"
 
     # Database
     DATABASE_URL: str = "postgresql+asyncpg://trading:trading1234@postgres:5432/trading_db"

@@ -1,5 +1,4 @@
-import os
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -11,27 +10,32 @@ from app.strategy.screener import run_screening
 from app.strategy.signal import detect_buy_signals
 
 router = APIRouter(prefix="/api/orders", tags=["orders"])
-ACCOUNT_NO = os.getenv("KIWOOM_ACCOUNT_NO", "")
 
 
 class ManualOrderRequest(BaseModel):
     stock_code: str
     order_type: str     # "buy" | "sell"
     quantity: int
-    price: int
+    price: int = 0      # 0이면 시장가
+    trade_type: str = "0"   # 0=지정가, 3=시장가
 
 
 @router.post("/manual")
 async def manual_order(req: ManualOrderRequest):
     """수동 주문"""
     client = get_kiwoom_client()
-    resp = await client.place_order(ACCOUNT_NO, req.stock_code, req.order_type, req.quantity, req.price)
+    resp = await client.place_order(
+        stock_code=req.stock_code,
+        order_type=req.order_type,
+        quantity=req.quantity,
+        price=req.price,
+        trade_type=req.trade_type,
+    )
     return {"success": True, "response": resp}
 
 
 @router.get("/today")
 async def get_today_orders(db: AsyncSession = Depends(get_db)):
-    """오늘의 주문 목록"""
     orders = (await db.execute(
         select(Order).order_by(Order.created_at.desc()).limit(100)
     )).scalars().all()
@@ -55,7 +59,6 @@ async def get_today_orders(db: AsyncSession = Depends(get_db)):
 
 @router.get("/pending-signals")
 async def get_pending_signals(db: AsyncSession = Depends(get_db)):
-    """내일 실행될 매수 신호 목록"""
     signals = (await db.execute(
         select(BuySignal).where(BuySignal.is_executed == False)
     )).scalars().all()

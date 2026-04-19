@@ -1,40 +1,54 @@
-import os
 from fastapi import APIRouter
-from app.core.kiwoom_client import get_kiwoom_client
+
+from app.core.kiwoom_client import get_kiwoom_client, to_int, to_float
 from app.config import settings
 
 router = APIRouter(prefix="/api/account", tags=["account"])
-ACCOUNT_NO = os.getenv("KIWOOM_ACCOUNT_NO", "")
 
 
 @router.get("/balance")
 async def get_balance():
-    """계좌 잔고 및 보유 종목 조회"""
+    """계좌평가잔고내역 (kt00018) + 예수금(kt00001) 통합"""
     client = get_kiwoom_client()
-    data = await client.get_balance(ACCOUNT_NO)
-    output1 = data.get("output1", [])   # 보유 종목
-    output2 = data.get("output2", {})   # 계좌 요약
+    bal = await client.get_balance()
+    dep = await client.get_deposit()
 
-    total_eval = int(output2.get("tot_evlu_amt", 0))
-    deposit = int(output2.get("prvs_rcdl_excc_amt", 0))
+    holdings = [
+        {
+            "code": _strip_code_prefix(h.get("stk_cd", "")),
+            "name": h.get("stk_nm", ""),
+            "quantity": to_int(h.get("rmnd_qty")),
+            "avg_price": to_int(h.get("pur_pric")),
+            "current_price": to_int(h.get("cur_prc")),
+            "eval_profit_loss": to_int(h.get("evltv_prft")),
+            "profit_rate": to_float(h.get("prft_rt")),
+        }
+        for h in (bal.get("acnt_evlt_remn_indv_tot", []) or [])
+    ]
+
+    total_eval = to_int(bal.get("tot_evlt_amt"))
+    deposit = to_int(dep.get("entr"))
+    order_available = to_int(dep.get("ord_alow_amt"))
     total_invest = settings.TOTAL_INVESTMENT
-    profit_rate = (total_eval - total_invest) / total_invest * 100 if total_invest else 0
+    profit_rate = (
+        (total_eval - total_invest) / total_invest * 100
+        if total_invest else 0
+    )
 
     return {
         "total_investment": total_invest,
         "total_eval_amount": total_eval,
+        "total_purchase_amount": to_int(bal.get("tot_pur_amt")),
+        "total_profit_loss": to_int(bal.get("tot_evlt_pl")),
+        "total_profit_rate": to_float(bal.get("tot_prft_rt")),
         "deposit": deposit,
+        "order_available": order_available,
         "profit_rate": round(profit_rate, 2),
-        "holdings": [
-            {
-                "code": h.get("pdno", ""),
-                "name": h.get("prdt_name", ""),
-                "quantity": int(h.get("hldg_qty", 0)),
-                "avg_price": int(h.get("pchs_avg_pric", 0)),
-                "current_price": int(h.get("prpr", 0)),
-                "eval_profit_loss": int(h.get("evlu_pfls_amt", 0)),
-                "profit_rate": float(h.get("evlu_pfls_rt", 0)),
-            }
-            for h in output1
-        ],
+        "holdings": holdings,
     }
+
+
+def _strip_code_prefix(code: str) -> str:
+    """키움 잔고 응답의 종목코드는 'A005930' 형식 — A 접두사 제거"""
+    c = (code or "").strip()
+    return c[1:] if c.startswith("A") else c

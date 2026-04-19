@@ -35,6 +35,7 @@ services:
       - redis
     volumes:
       - ./backend:/app
+      - /var/www/trading/dist:/app/dist:ro
     restart: unless-stopped
 
 volumes:
