@@ -1,15 +1,25 @@
 from fastapi import APIRouter, Depends
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth import get_current_user
 from app.core.kiwoom_client import get_kiwoom_client, to_int, to_float
-from app.config import settings
+from app.db.database import get_db
+from app.db.models import User
+from app.db.user_config import get_total_investment
 
-router = APIRouter(prefix="/api/account", tags=["account"], dependencies=[Depends(get_current_user)])
+router = APIRouter(prefix="/api/account", tags=["account"])
 
 
 @router.get("/balance")
-async def get_balance():
-    """계좌평가잔고내역 (kt00018) + 예수금(kt00001) 통합"""
+async def get_balance(
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """계좌평가잔고내역 (kt00018) + 예수금(kt00001) 통합.
+
+    주의: 현재는 단일 키움 계정을 공유하므로 계정 숫자는 모든 유저가 동일. 표시되는
+    '총 투자금' 만 유저별 설정을 반영. Phase 2.5 에서 계정도 유저별 분리 예정.
+    """
     client = get_kiwoom_client()
     bal = await client.get_balance()
     dep = await client.get_deposit()
@@ -27,12 +37,11 @@ async def get_balance():
         for h in (bal.get("acnt_evlt_remn_indv_tot", []) or [])
     ]
 
-    total_eval = to_int(bal.get("tot_evlt_amt"))          # 보유 종목 평가금액만
+    total_eval = to_int(bal.get("tot_evlt_amt"))          # 보유 종목 평가금액
     deposit = to_int(dep.get("entr"))                      # 예수금
     order_available = to_int(dep.get("ord_alow_amt"))
-    # 추정예탁자산 = 보유 평가금 + 예수금 + 대용금 등 (키움 내부 합산)
     total_asset = to_int(bal.get("prsm_dpst_aset_amt")) or (total_eval + deposit)
-    total_invest = settings.TOTAL_INVESTMENT
+    total_invest = await get_total_investment(db, user.id)
     profit_rate = (
         (total_asset - total_invest) / total_invest * 100
         if total_invest else 0

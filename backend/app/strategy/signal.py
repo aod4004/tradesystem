@@ -14,32 +14,35 @@ from app.core.kiwoom_client import get_kiwoom_client, to_int
 from app.db.models import ScreenedStock, Position, BuySignal, PositionStatus
 
 
-async def detect_buy_signals(db: AsyncSession) -> list[BuySignal]:
+async def detect_buy_signals(db: AsyncSession, user_id: int) -> list[BuySignal]:
     """
-    장 마감 후 실행 — 다음날 매수 예정 신호 생성
+    장 마감 후 실행 — 해당 유저의 다음날 매수 예정 신호 생성
     양봉 여부: 당일 종가 > 당일 시가 (일봉 차트 최신 봉)
+
+    종목 일봉 캐시를 호출부에서 주입할 수 있으나 Phase 2 에서는 간단히 유저별로 호출.
+    (동일 일봉 여러 번 조회되므로 추후 캐시 최적화 여지 있음)
     """
     client = get_kiwoom_client()
     signals: list[BuySignal] = []
 
-    stmt = select(ScreenedStock).where(ScreenedStock.is_active == True)
+    stmt = select(ScreenedStock).where(ScreenedStock.is_active == True)  # noqa: E712
     stocks = (await db.execute(stmt)).scalars().all()
 
     for stock in stocks:
         try:
-            sig = await _check_buy_signal(client, db, stock)
+            sig = await _check_buy_signal(client, db, stock, user_id)
             if sig:
                 db.add(sig)
                 signals.append(sig)
         except Exception as e:
-            print(f"[signal] {stock.code} 신호 확인 오류: {e}")
+            print(f"[signal] {stock.code} (user={user_id}) 신호 확인 오류: {e}")
 
     await db.commit()
     return signals
 
 
 async def _check_buy_signal(
-    client, db: AsyncSession, stock: ScreenedStock
+    client, db: AsyncSession, stock: ScreenedStock, user_id: int
 ) -> BuySignal | None:
     candles = await client.get_daily_chart(stock.code)
     if len(candles) < 2:
@@ -56,19 +59,21 @@ async def _check_buy_signal(
     if not is_bullish:
         return None
 
-    # 현재 포지션
+    # 유저의 현재 포지션
     pos_stmt = select(Position).where(
+        Position.user_id == user_id,
         Position.stock_code == stock.code,
         Position.status == PositionStatus.ACTIVE,
     )
     position = (await db.execute(pos_stmt)).scalar_one_or_none()
 
-    # 오늘 이미 미실행 신호 있으면 중복 방지
+    # 오늘 이미 미실행 신호 있으면 중복 방지 (같은 유저 기준)
     today_midnight = datetime.combine(datetime.utcnow().date(), datetime.min.time())
     dup_stmt = select(BuySignal).where(
+        BuySignal.user_id == user_id,
         BuySignal.stock_code == stock.code,
         BuySignal.signal_date >= today_midnight,
-        BuySignal.is_executed == False,
+        BuySignal.is_executed == False,  # noqa: E712
     )
     if (await db.execute(dup_stmt)).scalar_one_or_none():
         return None
@@ -87,6 +92,7 @@ async def _check_buy_signal(
         return None
 
     return BuySignal(
+        user_id=user_id,
         stock_code=stock.code,
         signal_date=datetime.utcnow(),
         trigger_round=next_round,

@@ -33,6 +33,26 @@ class User(Base):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
+    trading_config: Mapped["UserTradingConfig"] = relationship(
+        "UserTradingConfig", back_populates="user", uselist=False, cascade="all, delete-orphan",
+    )
+
+
+class UserTradingConfig(Base):
+    """유저별 투자금·키움 키. 키움 키 컬럼은 Phase 2.5 에서 실제 사용."""
+    __tablename__ = "user_trading_config"
+
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), primary_key=True)
+    total_investment: Mapped[float] = mapped_column(Float, default=10_000_000.0)
+    kiwoom_app_key: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    kiwoom_secret_key: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    kiwoom_mock: Mapped[bool] = mapped_column(Boolean, default=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow,
+    )
+
+    user: Mapped["User"] = relationship("User", back_populates="trading_config")
+
 
 class ScreenedStock(Base):
     """스크리닝 통과 종목"""
@@ -67,6 +87,7 @@ class Position(Base):
     __tablename__ = "positions"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), index=True)
     stock_code: Mapped[str] = mapped_column(String(10), ForeignKey("screened_stocks.code"), index=True)
     stock_name: Mapped[str] = mapped_column(String(50))
 
@@ -93,6 +114,7 @@ class Order(Base):
     __tablename__ = "orders"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), index=True)
     position_id: Mapped[int] = mapped_column(Integer, ForeignKey("positions.id"), nullable=True)
     stock_code: Mapped[str] = mapped_column(String(10), index=True)
     stock_name: Mapped[str] = mapped_column(String(50))
@@ -117,6 +139,7 @@ class BuySignal(Base):
     __tablename__ = "buy_signals"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), index=True)
     stock_code: Mapped[str] = mapped_column(String(10), ForeignKey("screened_stocks.code"), index=True)
     signal_date: Mapped[datetime] = mapped_column(DateTime)
     trigger_round: Mapped[int] = mapped_column(Integer)           # 1~5차

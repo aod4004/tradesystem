@@ -16,22 +16,31 @@ from app.db.models import (
     Position, Order, BuySignal,
     OrderType, OrderStatus,
 )
+from app.db.user_config import get_total_investment
 
 
-async def execute_pending_buy_orders(db: AsyncSession):
-    """장 시작 전(08:50) — 전날 감지된 매수 신호를 지정가 주문으로 전송"""
+async def execute_pending_buy_orders(db: AsyncSession, user_id: int):
+    """장 시작 전(08:50) — 해당 유저의 전날 감지된 매수 신호를 지정가 주문으로 전송"""
     client = get_kiwoom_client()
+    total_invest = await get_total_investment(db, user_id)
     signals = (
-        await db.execute(select(BuySignal).where(BuySignal.is_executed == False))
+        await db.execute(
+            select(BuySignal).where(
+                BuySignal.is_executed == False,  # noqa: E712
+                BuySignal.user_id == user_id,
+            )
+        )
     ).scalars().all()
 
     for sig in signals:
         try:
-            qty = calc_buy_qty(sig.target_order_price)
+            qty = calc_buy_qty(sig.target_order_price, total_invest)
             if qty <= 0:
                 continue
 
-            if await _has_open_order(db, sig.stock_code, OrderType.BUY, sig.trigger_round):
+            if await _has_open_order(
+                db, user_id, sig.stock_code, OrderType.BUY, sig.trigger_round
+            ):
                 print(f"[executor] {sig.stock_code} {sig.trigger_round}차 매수 주문 이미 진행중 — 스킵")
                 sig.is_executed = True
                 await db.commit()
@@ -47,6 +56,7 @@ async def execute_pending_buy_orders(db: AsyncSession):
             order_no = resp.get("ord_no", "")
 
             order = Order(
+                user_id=user_id,
                 stock_code=sig.stock_code,
                 stock_name="",
                 order_type=OrderType.BUY,
@@ -73,7 +83,9 @@ async def execute_sell_order(
     current_price: int,
 ) -> bool:
     """매도 주문 전송 (Position 은 건드리지 않음 — 체결 이벤트에서 갱신)"""
-    if await _has_open_order(db, position.stock_code, OrderType.SELL, sell_round, position.id):
+    if await _has_open_order(
+        db, position.user_id, position.stock_code, OrderType.SELL, sell_round, position.id
+    ):
         return False
 
     client = get_kiwoom_client()
@@ -90,6 +102,7 @@ async def execute_sell_order(
         order_no = resp.get("ord_no", "")
 
         order = Order(
+            user_id=position.user_id,
             position_id=position.id,
             stock_code=position.stock_code,
             stock_name=position.stock_name,
@@ -121,11 +134,14 @@ async def execute_extra_buy_order(
     재발동 방지를 위해 즉시 extra_buy_low=None 처리 (실제 포지션 수량 증가는 체결 이벤트에서)
     """
     # 추가매수 차수는 order_round=0 으로 기록(구분용)
-    if await _has_open_order(db, position.stock_code, OrderType.BUY, 0, position.id):
+    if await _has_open_order(
+        db, position.user_id, position.stock_code, OrderType.BUY, 0, position.id
+    ):
         return False
 
     client = get_kiwoom_client()
-    qty = calc_buy_qty(current_price)
+    total_invest = await get_total_investment(db, position.user_id)
+    qty = calc_buy_qty(current_price, total_invest)
     if qty <= 0:
         return False
 
@@ -140,6 +156,7 @@ async def execute_extra_buy_order(
         order_no = resp.get("ord_no", "")
 
         order = Order(
+            user_id=position.user_id,
             position_id=position.id,
             stock_code=position.stock_code,
             stock_name=position.stock_name,
@@ -167,13 +184,15 @@ async def execute_extra_buy_order(
 # ---------------------------------------------------------------------- #
 async def _has_open_order(
     db: AsyncSession,
+    user_id: int,
     stock_code: str,
     order_type: OrderType,
     order_round: int,
     position_id: int | None = None,
 ) -> bool:
-    """같은 종목/타입/차수의 SUBMITTED 주문 존재 여부"""
+    """같은 유저/종목/타입/차수의 SUBMITTED 주문 존재 여부"""
     stmt = select(Order).where(
+        Order.user_id == user_id,
         Order.stock_code == stock_code,
         Order.order_type == order_type,
         Order.order_round == order_round,
@@ -184,9 +203,9 @@ async def _has_open_order(
     return (await db.execute(stmt)).scalar_one_or_none() is not None
 
 
-def calc_buy_qty(price: int) -> int:
+def calc_buy_qty(price: int, total_investment: float) -> int:
     """1회 매수 수량 = (총투자금 × 회당 비율) // 지정가"""
     if price <= 0:
         return 0
-    buy_amount = settings.TOTAL_INVESTMENT * settings.BUY_RATIO_PER_ROUND
+    buy_amount = total_investment * settings.BUY_RATIO_PER_ROUND
     return int(buy_amount // price)

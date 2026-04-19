@@ -160,40 +160,44 @@ class KiwoomWebSocket:
 
     async def _check_and_execute_sell(self, code: str, current_price: int):
         async with AsyncSessionLocal() as db:
-            position = (
+            # 같은 종목을 보유한 모든 유저의 포지션을 각각 평가
+            positions = (
                 await db.execute(
                     select(Position).where(
                         Position.stock_code == code,
                         Position.status == PositionStatus.ACTIVE,
                     )
                 )
-            ).scalar_one_or_none()
-            if not position:
+            ).scalars().all()
+            if not positions:
                 return
 
             ma20 = self._ma20_cache.get(code)
-            sell_round = check_sell_signal(
-                current_price, position.avg_buy_price,
-                position.sell_rounds_done, ma20,
-            )
-            if sell_round:
-                await manager.broadcast("sell_signal", {
-                    "code": code,
-                    "sell_round": sell_round,
-                    "current_price": current_price,
-                    "avg_buy_price": position.avg_buy_price,
-                    "gain_rate": round(
-                        (current_price - position.avg_buy_price) / position.avg_buy_price * 100, 2
-                    ),
-                })
-                await execute_sell_order(db, position, sell_round, current_price)
+            for position in positions:
+                sell_round = check_sell_signal(
+                    current_price, position.avg_buy_price,
+                    position.sell_rounds_done, ma20,
+                )
+                if sell_round:
+                    await manager.broadcast("sell_signal", {
+                        "code": code,
+                        "user_id": position.user_id,
+                        "sell_round": sell_round,
+                        "current_price": current_price,
+                        "avg_buy_price": position.avg_buy_price,
+                        "gain_rate": round(
+                            (current_price - position.avg_buy_price) / position.avg_buy_price * 100, 2
+                        ),
+                    })
+                    await execute_sell_order(db, position, sell_round, current_price)
 
-            if check_extra_buy_signal(current_price, position):
-                await manager.broadcast("extra_buy_signal", {
-                    "code": code,
-                    "current_price": current_price,
-                })
-                await execute_extra_buy_order(db, position, current_price)
+                if check_extra_buy_signal(current_price, position):
+                    await manager.broadcast("extra_buy_signal", {
+                        "code": code,
+                        "user_id": position.user_id,
+                        "current_price": current_price,
+                    })
+                    await execute_extra_buy_order(db, position, current_price)
 
     async def _on_order_event(self, item: dict):
         """
@@ -239,7 +243,7 @@ class KiwoomWebSocket:
             if order.filled_qty >= order.order_qty:
                 order.status = OrderStatus.FILLED
 
-            # Position 갱신
+            # Position 갱신 — 유저 스코프 내에서 조회
             position = None
             if order.position_id:
                 position = (
@@ -250,6 +254,7 @@ class KiwoomWebSocket:
                 position = (
                     await db.execute(
                         select(Position).where(
+                            Position.user_id == order.user_id,
                             Position.stock_code == order.stock_code,
                             Position.status == PositionStatus.ACTIVE,
                         )
@@ -258,6 +263,7 @@ class KiwoomWebSocket:
 
             if position is None and order.order_type == OrderType.BUY:
                 position = Position(
+                    user_id=order.user_id,
                     stock_code=order.stock_code,
                     stock_name=order.stock_name or "",
                     buy_rounds_done=0,
