@@ -67,7 +67,7 @@ async def detect_buy_signals(
         except Exception as e:
             print(f"[signal] {w.stock_code} 관심종목 정보 조회 실패 (user={user_id}): {e}")
             continue
-        current_price = to_int(info.get("cur_prc"))
+        current_price = abs(to_int(info.get("cur_prc")))
         high_1y = abs(to_int(info.get("250hgst")))
         if current_price <= 0 or high_1y <= 0:
             # 250일 고점 없으면 일봉 차트로 폴백

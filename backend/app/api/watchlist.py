@@ -57,7 +57,8 @@ def _shell_payload(row: UserWatchlist, error: str | None = None) -> dict:
 
 
 def _enriched_payload(row: UserWatchlist, info: dict) -> dict:
-    current_price = to_int(info.get("cur_prc"))
+    # 키움 ka10001 의 가격 필드는 전일 대비 방향을 부호로 포함 — abs 로 절대값 사용
+    current_price = abs(to_int(info.get("cur_prc")))
     high_1y = abs(to_int(info.get("250hgst")))
     low_1y = abs(to_int(info.get("250lwst")))
     listed_shares = to_int(info.get("flo_stk")) * 1000    # 천주 → 주
@@ -157,9 +158,9 @@ async def add_watchlist(
             stock_name = str(val).strip()
             break
 
-    # 이름이 없더라도 현재가가 있으면 유효한 코드로 간주
+    # 이름이 없더라도 현재가가 있으면 유효한 코드로 간주 (abs 로 부호 제거)
     if not stock_name:
-        if to_int(info.get("cur_prc")) <= 0:
+        if abs(to_int(info.get("cur_prc"))) <= 0:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="유효하지 않은 종목 코드입니다",

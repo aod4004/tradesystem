@@ -161,7 +161,8 @@ async def _evaluate_stock(client, code: str, name: str, market: str):
     """
     info = await client.get_stock_info(code)
 
-    current_price = to_int(info.get("cur_prc"))
+    # ka10001 cur_prc 는 전일 대비 방향을 부호로 포함 (예: "-70000")
+    current_price = abs(to_int(info.get("cur_prc")))
     if current_price < settings.MIN_STOCK_PRICE:
         return None, "low_price"
 
