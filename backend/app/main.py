@@ -1,7 +1,5 @@
-import asyncio
 import os
 from contextlib import asynccontextmanager
-from pathlib import Path
 
 from fastapi import FastAPI, Query, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -17,23 +15,6 @@ from app.scheduler.jobs import create_scheduler
 from app.strategy.ma20 import refresh_ma20_for_active_positions
 from app.ws.manager import manager
 from app.ws.kiwoom_ws import kiwoom_ws
-
-
-ALEMBIC_INI = Path(__file__).resolve().parent.parent / "alembic.ini"
-
-
-def _run_alembic_upgrade() -> None:
-    """Alembic 을 동기 API 로 실행 — env.py 가 내부적으로 asyncio.run 을 쓰기 때문에
-    호출부의 이벤트 루프와 충돌하지 않도록 별도 스레드에서 돌린다."""
-    from alembic import command
-    from alembic.config import Config
-
-    cfg = Config(str(ALEMBIC_INI))
-    command.upgrade(cfg, "head")
-
-
-async def run_migrations() -> None:
-    await asyncio.to_thread(_run_alembic_upgrade)
 
 
 async def ensure_admin_user():
@@ -73,8 +54,7 @@ async def ensure_admin_user():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # 시작
-    await run_migrations()
+    # Alembic 은 컨테이너 엔트리포인트에서 uvicorn 전에 수행된다 (Dockerfile 참고).
     await ensure_admin_user()
     scheduler = create_scheduler()
     scheduler.start()
