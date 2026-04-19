@@ -165,7 +165,8 @@ async def _evaluate_stock(client, code: str, name: str, market: str):
     if current_price < settings.MIN_STOCK_PRICE:
         return None, "low_price"
 
-    listed_shares = to_int(info.get("flo_stk"))
+    # 키움 ka10001 의 flo_stk 는 "천주" 단위 — 시가총액 계산 시 × 1000 보정
+    listed_shares = to_int(info.get("flo_stk")) * 1000
     market_cap = listed_shares * current_price if listed_shares > 0 else 0
     if market_cap == 0:
         return None, "cap_unknown"
