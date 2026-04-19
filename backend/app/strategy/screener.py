@@ -9,8 +9,13 @@
 
 키움 ka10001 한 번 호출로 현재가·시총·재무·외인비율을 모두 얻고,
 ka10081 로 1년 일봉을 받아 고/저점을 계산한다.
+
+수동 재실행 시 결과가 완전히 재현되도록:
+ - 일시적 API 오류는 최대 3회까지 재시도 (지수 백오프)
+ - 탈락 사유를 집계해서 최종 요약 로그 출력
 """
 import asyncio
+from collections import Counter
 from datetime import datetime
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -30,8 +35,8 @@ async def run_screening(db: AsyncSession) -> list[ScreenedStock]:
     await db.commit()
 
     # 코스피(0) + 코스닥(10) 전체 종목
-    stock_rows: list[tuple[str, str, str]] = []   # (code, name, market)
-    skipped = 0
+    stock_rows: list[tuple[str, str, str]] = []
+    pre_filter = Counter()
     for mrkt_tp, market_name in [("0", "KOSPI"), ("10", "KOSDAQ")]:
         try:
             items = await client.get_stock_list(mrkt_tp)
@@ -39,38 +44,40 @@ async def run_screening(db: AsyncSession) -> list[ScreenedStock]:
                 code = (it.get("code") or "").strip()
                 name = (it.get("name") or "").strip()
                 if not code:
+                    pre_filter["no_code"] += 1
                     continue
                 if _is_skip_state(it):
-                    skipped += 1
+                    pre_filter["skip_state"] += 1
                     continue
-                # 사전 필터: 전일종가(lastPrice)가 최소 주가 미만이면 상세조회 스킵
                 last_price = to_int(it.get("lastPrice"))
                 if 0 < last_price < settings.MIN_STOCK_PRICE:
-                    skipped += 1
+                    pre_filter["below_min_price"] += 1
                     continue
                 stock_rows.append((code, name, market_name))
         except Exception as e:
             print(f"[screener] 종목 목록 조회 오류 ({market_name}): {e}")
 
-    print(f"[screener] 평가 대상: {len(stock_rows)}개 (사전 필터로 {skipped}개 제외)")
+    print(
+        f"[screener] 평가 대상 {len(stock_rows)}개 / "
+        f"사전 제외: {dict(pre_filter)}"
+    )
 
     results: list[ScreenedStock] = []
+    eval_stats = Counter()
     semaphore = asyncio.Semaphore(3)
 
     async def check_stock(code: str, name: str, market: str):
         async with semaphore:
-            try:
-                stock = await _evaluate_stock(client, code, name, market)
-                if stock:
-                    results.append(stock)
-                    db.add(stock)
-                await asyncio.sleep(0.2)
-            except Exception as e:
-                print(f"[screener] {code} {name} 평가 오류: {e}")
+            reason = await _evaluate_with_retry(client, code, name, market, results, db)
+            eval_stats[reason] += 1
+            await asyncio.sleep(0.2)
 
     await asyncio.gather(*(check_stock(*r) for r in stock_rows))
     await db.commit()
-    print(f"[screener] 완료 — 선정 {len(results)}개")
+
+    print(
+        f"[screener] 완료 — 선정 {len(results)}개 / 평가 결과: {dict(eval_stats)}"
+    )
     return results
 
 
@@ -85,52 +92,74 @@ def _is_skip_state(item: dict) -> bool:
     return False
 
 
-async def _evaluate_stock(client, code: str, name: str, market: str) -> ScreenedStock | None:
-    # 1) 기본정보 — 현재가, 상장주식수, 재무, 외인
+async def _evaluate_with_retry(
+    client, code: str, name: str, market: str,
+    results: list[ScreenedStock], db: AsyncSession,
+    max_attempts: int = 3,
+) -> str:
+    """전송 오류는 재시도, 탈락 사유는 즉시 반환"""
+    last_err: Exception | None = None
+    for attempt in range(max_attempts):
+        try:
+            stock, reason = await _evaluate_stock(client, code, name, market)
+            if stock:
+                results.append(stock)
+                db.add(stock)
+            return reason
+        except Exception as e:
+            last_err = e
+            if attempt < max_attempts - 1:
+                await asyncio.sleep(0.5 * (attempt + 1))
+    print(f"[screener] {code} {name} 평가 오류(3회 재시도 실패): {last_err}")
+    return "error"
+
+
+async def _evaluate_stock(client, code: str, name: str, market: str):
+    """
+    반환: (ScreenedStock | None, reason)
+    reason: accepted / low_price / cap_unknown / cap_too_large /
+            no_profit / chart_insufficient / low_rise / high_drop_small
+    """
     info = await client.get_stock_info(code)
 
     current_price = to_int(info.get("cur_prc"))
-    # 조건 1: 주가 2000원 이상
     if current_price < settings.MIN_STOCK_PRICE:
-        return None
+        return None, "low_price"
 
-    # 시가총액 = 상장주식수 × 현재가 (단위 독립, mac 필드 의존 제거)
     listed_shares = to_int(info.get("flo_stk"))
     market_cap = listed_shares * current_price if listed_shares > 0 else 0
-    # 조건 2: 시가총액 1조 이하 (0원은 정보 부족으로 제외)
-    if market_cap == 0 or market_cap > settings.MAX_MARKET_CAP:
-        return None
+    if market_cap == 0:
+        return None, "cap_unknown"
+    if market_cap > settings.MAX_MARKET_CAP:
+        return None, "cap_too_large"
 
-    net_income = to_float(info.get("cup_nga"))       # 당기순이익
-    operating_income = to_float(info.get("bus_pro"))  # 영업이익
-    foreign_ratio = to_float(info.get("for_exh_rt"))  # 외인소진률
+    net_income = to_float(info.get("cup_nga"))
+    operating_income = to_float(info.get("bus_pro"))
+    foreign_ratio = to_float(info.get("for_exh_rt"))
 
-    # 조건 3: 순이익 흑자
     if net_income <= 0:
-        return None
+        return None, "no_profit"
 
-    # 2) 1년 일봉 — 고점/저점 산출
     candles = await client.get_daily_chart(code)
-    closes: list[int] = [to_int(c.get("cur_prc")) for c in candles]
+    closes = [to_int(c.get("cur_prc")) for c in candles]
     closes = [p for p in closes if p > 0]
     if len(closes) < 20:
-        return None
+        return None, "chart_insufficient"
 
     high_1y = max(closes)
     low_1y = min(closes)
     if low_1y <= 0:
-        return None
+        return None, "chart_insufficient"
 
-    rise_from_low = high_1y / low_1y              # 저점 대비 상승 배수
-    drop_ratio = current_price / high_1y          # 고점 대비 현재가 비율
+    rise_from_low = high_1y / low_1y
+    drop_ratio = current_price / high_1y
 
-    # 조건 4
     if rise_from_low < settings.LOW_RISE_THRESHOLD:
-        return None
+        return None, "low_rise"
     if drop_ratio >= settings.HIGH_DROP_THRESHOLD:
-        return None
+        return None, "high_drop_small"
 
-    return ScreenedStock(
+    stock = ScreenedStock(
         code=code,
         name=name,
         market=market,
@@ -146,3 +175,4 @@ async def _evaluate_stock(client, code: str, name: str, market: str) -> Screened
         screened_at=datetime.utcnow(),
         is_active=True,
     )
+    return stock, "accepted"
