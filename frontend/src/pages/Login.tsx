@@ -27,8 +27,11 @@ export default function Login() {
   return (
     <div className="min-h-screen bg-gray-900 text-white flex items-center justify-center p-4">
       <form onSubmit={onSubmit} className="bg-gray-800 rounded-xl p-6 w-full max-w-sm space-y-4">
-        <h1 className="text-xl font-bold bg-gradient-to-r from-blue-400 via-cyan-300 to-emerald-400 bg-clip-text text-transparent">
-          MK’s Algorithmic Trading System
+        <h1
+          className="text-xl font-bold bg-gradient-to-r from-blue-400 via-cyan-300 to-emerald-400 bg-clip-text text-transparent"
+          style={{ paddingBottom: '5pt' }}
+        >
+          5P’s Algorithmic Trading System
         </h1>
         <p className="text-gray-400 text-sm">로그인</p>
         <label className="block">

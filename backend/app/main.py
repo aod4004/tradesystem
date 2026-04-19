@@ -79,7 +79,7 @@ async def lifespan(app: FastAPI):
     print("[main] 서버 종료")
 
 
-app = FastAPI(title="MK Trading System", version="1.0.0", lifespan=lifespan)
+app = FastAPI(title="5P Trading System", version="1.0.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,

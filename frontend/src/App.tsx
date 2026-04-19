@@ -88,8 +88,11 @@ function Dashboard() {
       {/* 헤더 */}
       <div className="flex items-start md:items-center justify-between mb-6 gap-3">
         <div>
-          <h1 className="text-xl md:text-3xl font-bold bg-gradient-to-r from-blue-400 via-cyan-300 to-emerald-400 bg-clip-text text-transparent tracking-tight">
-            MK’s Algorithmic Trading System
+          <h1
+            className="text-xl md:text-3xl font-bold bg-gradient-to-r from-blue-400 via-cyan-300 to-emerald-400 bg-clip-text text-transparent tracking-tight"
+            style={{ paddingBottom: '5pt' }}
+          >
+            5P’s Algorithmic Trading System
           </h1>
           <p className="text-gray-400 text-sm mt-1">Powered by Kiwoom REST API</p>
         </div>
