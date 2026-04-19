@@ -19,9 +19,17 @@ export default function PortfolioTable() {
     if (msg.type === 'price_update') {
       const d = msg.data as { code: string; current_price: number }
       setPrices(prev => ({ ...prev, [d.code]: d.current_price }))
+      return
     }
-    if (msg.type === 'sell_signal' || msg.type === 'order_filled') {
+    if (
+      msg.type === 'sell_signal' ||
+      msg.type === 'order_event' ||
+      msg.type === 'balance_event' ||
+      msg.type === 'extra_buy_signal'
+    ) {
       qc.invalidateQueries({ queryKey: ['positions'] })
+      qc.invalidateQueries({ queryKey: ['orders'] })
+      qc.invalidateQueries({ queryKey: ['balance'] })
     }
   }, [qc])
 

@@ -68,7 +68,14 @@ export interface Holding {
   profit_rate: number
 }
 
+export type WsMessageType =
+  | 'price_update'
+  | 'sell_signal'
+  | 'order_event'
+  | 'balance_event'
+  | 'extra_buy_signal'
+
 export interface WsMessage {
-  type: 'price_update' | 'sell_signal' | 'order_filled' | 'extra_buy_signal'
+  type: WsMessageType
   data: Record<string, unknown>
 }
