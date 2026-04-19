@@ -33,6 +33,9 @@ export interface PendingSignal {
   stock_name: string
   trigger_round: number
   target_order_price: number
+  quantity: number
+  amount: number
+  investment_ratio: number   // 총 투자금 대비 %
   signal_date: string
   is_executed?: boolean
 }

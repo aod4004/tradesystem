@@ -4,9 +4,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from sqlalchemy.orm import joinedload
 
+from app.config import settings
 from app.db.database import get_db
 from app.db.models import Order, BuySignal
 from app.core.kiwoom_client import get_kiwoom_client
+from app.strategy.executor import calc_buy_qty
 from app.strategy.screener import run_screening
 from app.strategy.signal import detect_buy_signals
 
@@ -65,16 +67,23 @@ async def get_pending_signals(db: AsyncSession = Depends(get_db)):
         .where(BuySignal.is_executed == False)
         .options(joinedload(BuySignal.stock))
     )).scalars().all()
-    return [
-        {
+    total_invest = settings.TOTAL_INVESTMENT
+    out = []
+    for s in signals:
+        qty = calc_buy_qty(s.target_order_price)
+        amount = qty * s.target_order_price
+        ratio = (amount / total_invest * 100) if total_invest else 0
+        out.append({
             "stock_code": s.stock_code,
             "stock_name": s.stock.name if s.stock else "",
             "trigger_round": s.trigger_round,
             "target_order_price": s.target_order_price,
+            "quantity": qty,
+            "amount": amount,
+            "investment_ratio": round(ratio, 2),
             "signal_date": s.signal_date.isoformat(),
-        }
-        for s in signals
-    ]
+        })
+    return out
 
 
 @router.post("/run-screening")

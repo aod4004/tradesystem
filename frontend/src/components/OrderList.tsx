@@ -32,7 +32,7 @@ export default function OrderList() {
         <table className="w-full text-sm text-gray-300">
           <thead>
             <tr className="text-gray-400 border-b border-gray-700">
-              {['종목명', '차수', '주문가격'].map(h => (
+              {['종목명', '차수', '주문가격', '수량', '금액', '비율'].map(h => (
                 <th key={h} className="py-1 px-2 text-right first:text-left">{h}</th>
               ))}
             </tr>
@@ -45,11 +45,14 @@ export default function OrderList() {
                   <span className="ml-1 text-xs text-gray-500">{s.stock_code}</span>
                 </td>
                 <td className="py-1 px-2 text-right text-blue-400">{s.trigger_round}차</td>
-                <td className="py-1 px-2 text-right">{s.target_order_price.toLocaleString()}원</td>
+                <td className="py-1 px-2 text-right">{s.target_order_price.toLocaleString()}</td>
+                <td className="py-1 px-2 text-right">{s.quantity.toLocaleString()}</td>
+                <td className="py-1 px-2 text-right">{s.amount.toLocaleString()}</td>
+                <td className="py-1 px-2 text-right text-yellow-400">{s.investment_ratio.toFixed(2)}%</td>
               </tr>
             ))}
             {signals.length === 0 && (
-              <tr><td colSpan={3} className="text-center py-4 text-gray-500">예정 주문 없음</td></tr>
+              <tr><td colSpan={6} className="text-center py-4 text-gray-500">예정 주문 없음</td></tr>
             )}
           </tbody>
         </table>

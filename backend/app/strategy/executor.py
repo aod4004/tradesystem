@@ -27,7 +27,7 @@ async def execute_pending_buy_orders(db: AsyncSession):
 
     for sig in signals:
         try:
-            qty = _calc_buy_qty(sig.target_order_price)
+            qty = calc_buy_qty(sig.target_order_price)
             if qty <= 0:
                 continue
 
@@ -125,7 +125,7 @@ async def execute_extra_buy_order(
         return False
 
     client = get_kiwoom_client()
-    qty = _calc_buy_qty(current_price)
+    qty = calc_buy_qty(current_price)
     if qty <= 0:
         return False
 
@@ -184,7 +184,8 @@ async def _has_open_order(
     return (await db.execute(stmt)).scalar_one_or_none() is not None
 
 
-def _calc_buy_qty(price: int) -> int:
+def calc_buy_qty(price: int) -> int:
+    """1회 매수 수량 = (총투자금 × 회당 비율) // 지정가"""
     if price <= 0:
         return 0
     buy_amount = settings.TOTAL_INVESTMENT * settings.BUY_RATIO_PER_ROUND

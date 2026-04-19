@@ -3,9 +3,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from sqlalchemy.orm import joinedload
 
+from app.config import settings
 from app.db.database import get_db
 from app.db.models import ScreenedStock, Position, Order, BuySignal, PositionStatus, OrderStatus
 from app.core.kiwoom_client import get_kiwoom_client
+from app.strategy.executor import calc_buy_qty
 
 router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
 
@@ -94,11 +96,18 @@ def _format_position(p: Position) -> dict:
 
 
 def _format_signal(s: BuySignal) -> dict:
+    qty = calc_buy_qty(s.target_order_price)
+    amount = qty * s.target_order_price
+    total_invest = settings.TOTAL_INVESTMENT
+    ratio = (amount / total_invest * 100) if total_invest else 0
     return {
         "stock_code": s.stock_code,
         "stock_name": s.stock.name if s.stock else "",
         "trigger_round": s.trigger_round,
         "target_order_price": s.target_order_price,
+        "quantity": qty,
+        "amount": amount,
+        "investment_ratio": round(ratio, 2),
         "signal_date": s.signal_date.isoformat(),
         "is_executed": s.is_executed,
     }
