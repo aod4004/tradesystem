@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
+from sqlalchemy.orm import joinedload
 
 from app.db.database import get_db
 from app.db.models import ScreenedStock, Position, Order, BuySignal, PositionStatus, OrderStatus
@@ -26,7 +27,9 @@ async def get_dashboard(db: AsyncSession = Depends(get_db)):
 
     # 오늘 대기 중인 매수 신호
     pending_signals = (await db.execute(
-        select(BuySignal).where(BuySignal.is_executed == False)
+        select(BuySignal)
+        .where(BuySignal.is_executed == False)
+        .options(joinedload(BuySignal.stock))
     )).scalars().all()
 
     # 오늘 주문 이력
@@ -93,6 +96,7 @@ def _format_position(p: Position) -> dict:
 def _format_signal(s: BuySignal) -> dict:
     return {
         "stock_code": s.stock_code,
+        "stock_name": s.stock.name if s.stock else "",
         "trigger_round": s.trigger_round,
         "target_order_price": s.target_order_price,
         "signal_date": s.signal_date.isoformat(),

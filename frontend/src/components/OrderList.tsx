@@ -32,7 +32,7 @@ export default function OrderList() {
         <table className="w-full text-sm text-gray-300">
           <thead>
             <tr className="text-gray-400 border-b border-gray-700">
-              {['종목코드', '차수', '주문가격'].map(h => (
+              {['종목명', '차수', '주문가격'].map(h => (
                 <th key={h} className="py-1 px-2 text-right first:text-left">{h}</th>
               ))}
             </tr>
@@ -40,7 +40,10 @@ export default function OrderList() {
           <tbody>
             {signals.map((s, i) => (
               <tr key={i} className="border-b border-gray-700">
-                <td className="py-1 px-2 text-white">{s.stock_code}</td>
+                <td className="py-1 px-2">
+                  <span className="font-medium text-white">{s.stock_name || s.stock_code}</span>
+                  <span className="ml-1 text-xs text-gray-500">{s.stock_code}</span>
+                </td>
                 <td className="py-1 px-2 text-right text-blue-400">{s.trigger_round}차</td>
                 <td className="py-1 px-2 text-right">{s.target_order_price.toLocaleString()}원</td>
               </tr>

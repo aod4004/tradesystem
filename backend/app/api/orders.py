@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+from sqlalchemy.orm import joinedload
 
 from app.db.database import get_db
 from app.db.models import Order, BuySignal
@@ -60,11 +61,14 @@ async def get_today_orders(db: AsyncSession = Depends(get_db)):
 @router.get("/pending-signals")
 async def get_pending_signals(db: AsyncSession = Depends(get_db)):
     signals = (await db.execute(
-        select(BuySignal).where(BuySignal.is_executed == False)
+        select(BuySignal)
+        .where(BuySignal.is_executed == False)
+        .options(joinedload(BuySignal.stock))
     )).scalars().all()
     return [
         {
             "stock_code": s.stock_code,
+            "stock_name": s.stock.name if s.stock else "",
             "trigger_round": s.trigger_round,
             "target_order_price": s.target_order_price,
             "signal_date": s.signal_date.isoformat(),

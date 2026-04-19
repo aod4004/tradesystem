@@ -30,10 +30,11 @@ export interface Position {
 
 export interface PendingSignal {
   stock_code: string
+  stock_name: string
   trigger_round: number
   target_order_price: number
   signal_date: string
-  is_executed: boolean
+  is_executed?: boolean
 }
 
 export interface OrderRecord {
