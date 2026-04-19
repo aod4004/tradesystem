@@ -23,7 +23,7 @@ export default function OrderList() {
   })
 
   return (
-    <div className="grid grid-cols-2 gap-4 mb-6">
+    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
       {/* 내일 예정 매수 신호 */}
       <div className="bg-gray-800 rounded-xl p-4">
         <h2 className="text-lg font-bold text-white mb-3">
@@ -32,9 +32,12 @@ export default function OrderList() {
         <table className="w-full text-sm text-gray-300">
           <thead>
             <tr className="text-gray-400 border-b border-gray-700">
-              {['종목명', '차수', '주문가격', '수량', '금액', '비율'].map(h => (
-                <th key={h} className="py-1 px-2 text-right first:text-left">{h}</th>
-              ))}
+              <th className="py-1 px-2 text-left">종목명</th>
+              <th className="py-1 px-2 text-right">차수</th>
+              <th className="py-1 px-2 text-right">주문가격</th>
+              <th className="py-1 px-2 text-right hidden md:table-cell">수량</th>
+              <th className="py-1 px-2 text-right hidden md:table-cell">금액</th>
+              <th className="py-1 px-2 text-right hidden md:table-cell">비율</th>
             </tr>
           </thead>
           <tbody>
@@ -43,12 +46,15 @@ export default function OrderList() {
                 <td className="py-1 px-2">
                   <span className="font-medium text-white">{s.stock_name || s.stock_code}</span>
                   <span className="ml-1 text-xs text-gray-500">{s.stock_code}</span>
+                  <div className="md:hidden text-xs text-gray-500 mt-0.5">
+                    {s.quantity.toLocaleString()}주 · {s.amount.toLocaleString()}원 · <span className="text-yellow-400">{s.investment_ratio.toFixed(2)}%</span>
+                  </div>
                 </td>
                 <td className="py-1 px-2 text-right text-blue-400">{s.trigger_round}차</td>
                 <td className="py-1 px-2 text-right">{s.target_order_price.toLocaleString()}</td>
-                <td className="py-1 px-2 text-right">{s.quantity.toLocaleString()}</td>
-                <td className="py-1 px-2 text-right">{s.amount.toLocaleString()}</td>
-                <td className="py-1 px-2 text-right text-yellow-400">{s.investment_ratio.toFixed(2)}%</td>
+                <td className="py-1 px-2 text-right hidden md:table-cell">{s.quantity.toLocaleString()}</td>
+                <td className="py-1 px-2 text-right hidden md:table-cell">{s.amount.toLocaleString()}</td>
+                <td className="py-1 px-2 text-right hidden md:table-cell text-yellow-400">{s.investment_ratio.toFixed(2)}%</td>
               </tr>
             ))}
             {signals.length === 0 && (

@@ -18,7 +18,7 @@ export default function AccountSummary() {
   ]
 
   return (
-    <div className="grid grid-cols-4 gap-4 mb-6">
+    <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
       {cards.map(c => (
         <div key={c.label} className="bg-gray-800 rounded-xl p-4">
           <p className="text-gray-400 text-sm mb-1">{c.label}</p>

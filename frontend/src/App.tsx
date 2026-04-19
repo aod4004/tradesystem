@@ -26,7 +26,7 @@ function Dashboard() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-900 text-white p-6">
+    <div className="min-h-screen bg-gray-900 text-white p-4 md:p-6">
       {/* 헤더 */}
       <div className="flex items-center justify-between mb-6">
         <div>
