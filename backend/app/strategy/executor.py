@@ -1,8 +1,12 @@
 """
-주문 실행 모듈 — 매수/매도 신호를 실제 키움 API 주문으로 변환
+주문 실행 모듈 — 매수/매도 신호를 실제 키움 API 주문으로 변환한다.
+
+원칙: 이 모듈은 Order 레코드만 만들고 Position은 건드리지 않는다.
+       Position 갱신은 WebSocket 주문체결(00) 이벤트에서 처리하여
+       체결/취소/거부를 신뢰성 있게 반영한다.
+
+중복 주문 가드: 같은 차수에 대해 열려있는(SUBMITTED) 주문이 있으면 재전송하지 않는다.
 """
-import os
-from datetime import datetime
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
@@ -10,21 +14,16 @@ from app.config import settings
 from app.core.kiwoom_client import get_kiwoom_client
 from app.db.models import (
     Position, Order, BuySignal,
-    OrderType, OrderStatus, PositionStatus,
+    OrderType, OrderStatus,
 )
-
-ACCOUNT_NO = os.getenv("KIWOOM_ACCOUNT_NO", "")  # .env에 KIWOOM_ACCOUNT_NO 설정 필요
 
 
 async def execute_pending_buy_orders(db: AsyncSession):
-    """
-    장 시작 전(08:50) 실행 — 전날 감지된 매수 신호를 주문으로 전송
-    매수 가격: 신호 발생 당일 종가 (target_order_price)
-    """
+    """장 시작 전(08:50) — 전날 감지된 매수 신호를 지정가 주문으로 전송"""
     client = get_kiwoom_client()
-
-    stmt = select(BuySignal).where(BuySignal.is_executed == False)
-    signals = (await db.execute(stmt)).scalars().all()
+    signals = (
+        await db.execute(select(BuySignal).where(BuySignal.is_executed == False))
+    ).scalars().all()
 
     for sig in signals:
         try:
@@ -32,17 +31,21 @@ async def execute_pending_buy_orders(db: AsyncSession):
             if qty <= 0:
                 continue
 
+            if await _has_open_order(db, sig.stock_code, OrderType.BUY, sig.trigger_round):
+                print(f"[executor] {sig.stock_code} {sig.trigger_round}차 매수 주문 이미 진행중 — 스킵")
+                sig.is_executed = True
+                await db.commit()
+                continue
+
             resp = await client.place_order(
-                account_no=ACCOUNT_NO,
                 stock_code=sig.stock_code,
                 order_type="buy",
                 quantity=qty,
                 price=sig.target_order_price,
+                trade_type="0",
             )
+            order_no = resp.get("ord_no", "")
 
-            order_no = resp.get("output", {}).get("KRX_FWDG_ORD_ORGNO", "")
-
-            # 주문 기록
             order = Order(
                 stock_code=sig.stock_code,
                 stock_name="",
@@ -54,14 +57,10 @@ async def execute_pending_buy_orders(db: AsyncSession):
                 status=OrderStatus.SUBMITTED,
             )
             db.add(order)
-
             sig.is_executed = True
             await db.commit()
 
-            # 포지션 업데이트 (체결 가정 — 실제로는 WebSocket 체결 이벤트로 처리)
-            await _update_position_on_buy(db, sig, qty, sig.target_order_price, order)
-
-            print(f"[executor] 매수 주문 전송: {sig.stock_code} {qty}주 @{sig.target_order_price:,}원 ({sig.trigger_round}차)")
+            print(f"[executor] 매수 주문 전송: {sig.stock_code} {qty}주 @{sig.target_order_price:,}원 ({sig.trigger_round}차) ord_no={order_no}")
 
         except Exception as e:
             print(f"[executor] 매수 주문 오류 ({sig.stock_code}): {e}")
@@ -73,20 +72,22 @@ async def execute_sell_order(
     sell_round: int,
     current_price: int,
 ) -> bool:
-    """매도 주문 실행"""
-    client = get_kiwoom_client()
+    """매도 주문 전송 (Position 은 건드리지 않음 — 체결 이벤트에서 갱신)"""
+    if await _has_open_order(db, position.stock_code, OrderType.SELL, sell_round, position.id):
+        return False
 
+    client = get_kiwoom_client()
     sell_qty = max(1, round(position.quantity * settings.SELL_QUANTITY_RATIO))
 
     try:
         resp = await client.place_order(
-            account_no=ACCOUNT_NO,
             stock_code=position.stock_code,
             order_type="sell",
             quantity=sell_qty,
             price=current_price,
+            trade_type="0",
         )
-        order_no = resp.get("output", {}).get("KRX_FWDG_ORD_ORGNO", "")
+        order_no = resp.get("ord_no", "")
 
         order = Order(
             position_id=position.id,
@@ -100,22 +101,9 @@ async def execute_sell_order(
             status=OrderStatus.SUBMITTED,
         )
         db.add(order)
-
-        # 포지션 업데이트
-        position.sell_rounds_done = sell_round
-        position.quantity -= sell_qty
-
-        # 3차 매도 완료 시 추가 매수 기준 저점 업데이트
-        if sell_round == settings.EXTRA_BUY_MIN_SELL_ROUNDS:
-            position.extra_buy_low = current_price
-
-        # 5차 매도 완료 → 포지션 청산
-        if position.quantity <= 0 or sell_round == 5:
-            position.status = PositionStatus.CLOSED
-            position.closed_at = datetime.utcnow()
-
         await db.commit()
-        print(f"[executor] 매도 주문 전송: {position.stock_code} {sell_qty}주 @{current_price:,}원 ({sell_round}차)")
+
+        print(f"[executor] 매도 주문 전송: {position.stock_code} {sell_qty}주 @{current_price:,}원 ({sell_round}차) ord_no={order_no}")
         return True
 
     except Exception as e:
@@ -123,44 +111,80 @@ async def execute_sell_order(
         return False
 
 
-async def _update_position_on_buy(
+async def execute_extra_buy_order(
     db: AsyncSession,
-    signal: BuySignal,
-    qty: int,
-    price: int,
-    order: Order,
-):
-    """매수 체결 후 포지션 업데이트"""
-    stmt = select(Position).where(
-        Position.stock_code == signal.stock_code,
-        Position.status == PositionStatus.ACTIVE,
-    )
-    position = (await db.execute(stmt)).scalar_one_or_none()
+    position: Position,
+    current_price: int,
+) -> bool:
+    """
+    추가 매수 실행 — 3회 이상 매도 완료 후 저점의 90% 이하 하락 시 발동
+    재발동 방지를 위해 즉시 extra_buy_low=None 처리 (실제 포지션 수량 증가는 체결 이벤트에서)
+    """
+    # 추가매수 차수는 order_round=0 으로 기록(구분용)
+    if await _has_open_order(db, position.stock_code, OrderType.BUY, 0, position.id):
+        return False
 
-    if position is None:
-        position = Position(
-            stock_code=signal.stock_code,
-            stock_name="",
-            buy_rounds_done=0,
-            sell_rounds_done=0,
-            quantity=0,
-            avg_buy_price=0,
-            total_buy_amount=0,
+    client = get_kiwoom_client()
+    qty = _calc_buy_qty(current_price)
+    if qty <= 0:
+        return False
+
+    try:
+        resp = await client.place_order(
+            stock_code=position.stock_code,
+            order_type="buy",
+            quantity=qty,
+            price=current_price,
+            trade_type="0",
         )
-        db.add(position)
+        order_no = resp.get("ord_no", "")
 
-    total_before = position.avg_buy_price * position.quantity
-    position.quantity += qty
-    position.total_buy_amount += price * qty
-    position.avg_buy_price = position.total_buy_amount / position.quantity
-    position.buy_rounds_done = signal.trigger_round
-    order.position_id = position.id
+        order = Order(
+            position_id=position.id,
+            stock_code=position.stock_code,
+            stock_name=position.stock_name,
+            order_type=OrderType.BUY,
+            order_round=0,          # 0 = 추가매수
+            order_price=current_price,
+            order_qty=qty,
+            kiwoom_order_no=order_no,
+            status=OrderStatus.SUBMITTED,
+        )
+        db.add(order)
+        position.extra_buy_low = None   # 즉시 재발동 방지
+        await db.commit()
 
-    await db.commit()
+        print(f"[executor] 추가 매수 주문 전송: {position.stock_code} {qty}주 @{current_price:,}원 ord_no={order_no}")
+        return True
+
+    except Exception as e:
+        print(f"[executor] 추가 매수 오류 ({position.stock_code}): {e}")
+        return False
+
+
+# ---------------------------------------------------------------------- #
+#  헬퍼
+# ---------------------------------------------------------------------- #
+async def _has_open_order(
+    db: AsyncSession,
+    stock_code: str,
+    order_type: OrderType,
+    order_round: int,
+    position_id: int | None = None,
+) -> bool:
+    """같은 종목/타입/차수의 SUBMITTED 주문 존재 여부"""
+    stmt = select(Order).where(
+        Order.stock_code == stock_code,
+        Order.order_type == order_type,
+        Order.order_round == order_round,
+        Order.status == OrderStatus.SUBMITTED,
+    )
+    if position_id is not None:
+        stmt = stmt.where(Order.position_id == position_id)
+    return (await db.execute(stmt)).scalar_one_or_none() is not None
 
 
 def _calc_buy_qty(price: int) -> int:
-    """1회 매수 수량 계산 (총 투자금의 2%)"""
     if price <= 0:
         return 0
     buy_amount = settings.TOTAL_INVESTMENT * settings.BUY_RATIO_PER_ROUND
