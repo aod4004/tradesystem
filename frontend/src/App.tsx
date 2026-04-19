@@ -30,8 +30,8 @@ function Dashboard() {
       {/* 헤더 */}
       <div className="flex items-center justify-between mb-6">
         <div>
-          <h1 className="text-2xl md:text-3xl font-bold bg-gradient-to-r from-blue-400 via-cyan-300 to-emerald-400 bg-clip-text text-transparent tracking-tight">
-            AutoTrade
+          <h1 className="text-xl md:text-3xl font-bold bg-gradient-to-r from-blue-400 via-cyan-300 to-emerald-400 bg-clip-text text-transparent tracking-tight">
+            MK’s Algorithmic Trading System
           </h1>
           <p className="text-gray-400 text-sm mt-1">Powered by Kiwoom REST API</p>
         </div>
