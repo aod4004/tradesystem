@@ -16,6 +16,7 @@ Phase 2.5 부터:
 """
 import asyncio
 import hashlib
+import random
 from datetime import datetime
 from typing import Any, TYPE_CHECKING
 import httpx
@@ -29,8 +30,13 @@ from app.config import settings
 # 스크리너(시스템 키) 와 UI 호출(유저 키, admin 은 시스템 키와 동일)이 같은 app_key
 # 를 쓰면 rate limit 을 공유한다. 이 세마포어로 app_key 별 총 동시 요청을 제한해
 # 스크리닝 중에도 UI 호출이 429 없이 대기 후 처리되도록 한다.
-_PER_KEY_CONCURRENCY = 5
+_PER_KEY_CONCURRENCY = 3
 _app_key_semaphores: dict[str, asyncio.Semaphore] = {}
+
+# 429 재시도 정책 — 키움은 request rate 초과 시 '429 null' 을 던진다.
+# Retry-After 헤더가 있으면 그 값을, 없으면 지수 백오프 + 작은 jitter.
+_RATE_LIMIT_MAX_RETRIES = 5
+_RATE_LIMIT_BASE_DELAY = 1.0   # 초 — 1, 2, 4, 8, 16 형태로 증가
 
 
 def _get_request_semaphore(app_key: str) -> asyncio.Semaphore:
@@ -210,9 +216,29 @@ class KiwoomClient:
             "cont-yn": cont_yn,
             "next-key": next_key,
         }
-        # app_key 별 동시 요청 상한 내에서만 실제 호출
-        async with _get_request_semaphore(self._app_key):
-            resp = await self._http.post(url, headers=headers, json=body)
+
+        # 429 재시도 — 세마포어 안에서 반복해 다른 호출이 먼저 통과하도록.
+        # 슬롯을 점유한 채 기다리면 뒤의 호출도 block 되므로 재시도 사이엔 슬롯을 놓는다.
+        attempt = 0
+        while True:
+            async with _get_request_semaphore(self._app_key):
+                resp = await self._http.post(url, headers=headers, json=body)
+            if resp.status_code != 429:
+                break
+            if attempt >= _RATE_LIMIT_MAX_RETRIES:
+                resp.raise_for_status()
+            retry_after = resp.headers.get("retry-after")
+            if retry_after:
+                try:
+                    delay = float(retry_after)
+                except ValueError:
+                    delay = _RATE_LIMIT_BASE_DELAY
+            else:
+                delay = _RATE_LIMIT_BASE_DELAY * (2 ** attempt)
+            delay += random.uniform(0, 0.3)   # jitter — 재시도 동기화 방지
+            attempt += 1
+            await asyncio.sleep(delay)
+
         resp.raise_for_status()
         data = resp.json()
         if data.get("return_code", 0) != 0:

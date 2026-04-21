@@ -30,8 +30,10 @@ from app.db.models import ScreenedStock
 # 안전 장치: 스크리닝 최대 소요 시간(초). 초과 시 더 이상 새 종목을 평가하지 않음.
 SCREENING_MAX_SECONDS = 20 * 60    # 20분
 
-# 동시 요청 수 — 키움 rate limit 에 여유를 둔 값.
-SCREENING_CONCURRENCY = 10
+# 동시 요청 수 — 키움 rate limit(≈ 초당 수 req) 에 맞춰 보수적으로.
+# 10 으로 두면 15,000+ 종목 평가 시 429 가 대량 발생해 절반 이상이 'error' 로 탈락한다.
+# KiwoomClient.request 에서 429 자동 재시도를 넣었지만, 근본적으로 동시성을 줄이는 편이 안전.
+SCREENING_CONCURRENCY = 3
 
 
 async def run_screening(

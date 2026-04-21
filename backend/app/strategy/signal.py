@@ -7,6 +7,7 @@
 
 매도 신호 (실시간): 실시간 체결가 기반 조건 평가
 """
+from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -89,17 +90,24 @@ async def detect_buy_signals(
             source="watchlist",
         ))
 
-    # 3) 각 후보별 조건 평가
+    # 3) 각 후보별 조건 평가 — 탈락 사유 집계
+    reasons: Counter = Counter()
     for cand in candidates:
         try:
-            sig = await _check_buy_signal(client, db, cand, user_id)
+            sig, reason = await _check_buy_signal(client, db, cand, user_id)
+            reasons[reason] += 1
             if sig:
                 db.add(sig)
                 signals.append(sig)
         except Exception as e:
+            reasons["error"] += 1
             print(f"[signal] {cand.code} (user={user_id}) 신호 확인 오류: {e}")
 
     await db.commit()
+    print(
+        f"[signal] user={user_id} 후보 {len(candidates)}개 평가 결과 "
+        f"(선정 {len(signals)}): {dict(reasons)}"
+    )
 
     # 알림: 당일 감지된 신호가 있으면 요약 1건 발송
     if signals:
@@ -121,21 +129,26 @@ async def detect_buy_signals(
 
 async def _check_buy_signal(
     client, db: AsyncSession, cand: BuyCandidate, user_id: int
-) -> BuySignal | None:
+) -> tuple[BuySignal | None, str]:
+    """반환: (신호 or None, reason).
+
+    reason 값 — accepted / no_candles / invalid_ohlc / not_bullish /
+                 max_rounds / duplicate_today / above_trigger
+    """
     candles = await client.get_daily_chart(cand.code)
     if len(candles) < 2:
-        return None
+        return None, "no_candles"
 
     # 최신 봉 = candles[0] (당일 종가)
     today = candles[0]
     today_open = to_int(today.get("open_pric"))
     today_close = to_int(today.get("cur_prc"))
     if today_open <= 0 or today_close <= 0:
-        return None
+        return None, "invalid_ohlc"
 
     is_bullish = today_close > today_open
     if not is_bullish:
-        return None
+        return None, "not_bullish"
 
     # 유저의 현재 포지션
     pos_stmt = select(Position).where(
@@ -154,21 +167,21 @@ async def _check_buy_signal(
         BuySignal.is_executed == False,  # noqa: E712
     )
     if (await db.execute(dup_stmt)).scalar_one_or_none():
-        return None
+        return None, "duplicate_today"
 
     next_round = 1
     trigger_price = cand.high_1y * settings.HIGH_DROP_THRESHOLD
 
     if position:
         if position.buy_rounds_done >= settings.MAX_BUY_ROUNDS:
-            return None
+            return None, "max_rounds"
         next_round = position.buy_rounds_done + 1
         trigger_price = position.avg_buy_price * 0.90   # 전 차수 매수가의 90%
 
     if cand.current_price >= trigger_price:
-        return None
+        return None, "above_trigger"
 
-    return BuySignal(
+    sig = BuySignal(
         user_id=user_id,
         stock_code=cand.code,
         stock_name=cand.name,
@@ -182,6 +195,7 @@ async def _check_buy_signal(
         is_executed=False,
         is_excluded=False,
     )
+    return sig, "accepted"
 
 
 # ---------------------------------------------------------------------- #

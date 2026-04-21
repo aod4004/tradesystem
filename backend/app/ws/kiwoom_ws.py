@@ -103,23 +103,39 @@ class UserKiwoomWS:
 
     async def _run(self) -> None:
         token = await self.client.get_token()
-        headers = {"authorization": f"Bearer {token}"}
         async with websockets.connect(
             self.client.ws_url,
-            extra_headers=headers,
             ping_interval=20,
             ping_timeout=20,
         ) as ws:
             self._ws = ws
             print(f"[kiwoom_ws user={self.user_id}] 연결됨 — {self.client.ws_url}")
 
-            # 주문체결(00) + 잔고(04) — 토큰 귀속, item 불필요
+            # 1) 로그인 전문 — 키움 WS 는 접속 직후 LOGIN 으로 인증해야 REG 가능.
+            #    authorization 헤더가 아니라 body 의 token 필드로 인증한다.
+            await self._send({"trnm": "LOGIN", "token": token})
+            while True:
+                raw = await ws.recv()
+                try:
+                    msg = json.loads(raw)
+                except Exception:
+                    continue
+                if msg.get("trnm") != "LOGIN":
+                    continue
+                if msg.get("return_code", 0) != 0:
+                    raise RuntimeError(
+                        f"키움 WS 로그인 실패: {msg.get('return_msg')}"
+                    )
+                break
+            print(f"[kiwoom_ws user={self.user_id}] 로그인 성공")
+
+            # 2) 주문체결(00) + 잔고(04) — 토큰 귀속, item 불필요
             await self._send({
                 "trnm": "REG", "grp_no": "1", "refresh": "1",
                 "data": [{"item": [""], "type": ["00", "04"]}],
             })
 
-            # 이 유저의 보유 종목 실시간 체결(0B) 구독
+            # 3) 이 유저의 보유 종목 실시간 체결(0B) 구독
             await self._subscribe_active_positions()
 
             async for raw in ws:
@@ -170,6 +186,10 @@ class UserKiwoomWS:
             return
 
         trnm = msg.get("trnm")
+        # 키움 WS 는 application-level PING 을 주기적으로 보낸다 — 그대로 echo 해야 끊기지 않음.
+        if trnm == "PING":
+            await self._send(msg)
+            return
         if trnm != "REAL":
             if msg.get("return_code", 0) != 0:
                 print(f"[kiwoom_ws user={self.user_id}] {trnm} 응답 오류: {msg.get('return_msg')}")
