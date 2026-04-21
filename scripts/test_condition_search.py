@@ -94,24 +94,32 @@ async def main(user_id: int) -> int:
             print(f"\n[FAIL] CNSRLST return_code != 0: {cnsrlst_msg.get('return_msg')}")
             return 6
 
-        conditions = cnsrlst_msg.get("data") or []
-        if not conditions:
+        raw_conditions = cnsrlst_msg.get("data") or []
+        if not raw_conditions:
             print(
                 "\n[warn] 저장된 조건식이 0개 — 영웅문4(HTS) 에서 조건식을 먼저 만들고 저장해야 합니다.\n"
                 "       접속: 영웅문4 → [0150] 조건검색 → 조건 작성 → 이름 지정 → 서버 저장."
             )
             return 0
 
+        # 실측 스펙: data 는 [[seq, name], ...] 배열. dict 형태인 경우도 보호적으로 처리.
+        conditions: list[tuple[str, str]] = []
+        for c in raw_conditions:
+            if isinstance(c, (list, tuple)) and len(c) >= 2:
+                conditions.append((str(c[0]), str(c[1])))
+            elif isinstance(c, dict):
+                conditions.append((str(c.get("seq", "")), str(c.get("name", ""))))
+
         print(f"\n[ok] 저장된 조건식 {len(conditions)}개:")
-        for c in conditions:
-            print(f"  seq={c.get('seq')}  name={c.get('name')}")
+        for seq, name in conditions:
+            print(f"  seq={seq}  name={name}")
 
         # 3) 첫 번째 조건식으로 CNSRREQ — 결과 종목 수 확인
-        seq = conditions[0].get("seq")
+        seq = conditions[0][0]
         print(f"\n[info] seq={seq} 로 CNSRREQ 테스트 (search_type=0, stex_tp=K)")
         await ws.send(json.dumps({
             "trnm": "CNSRREQ",
-            "seq": str(seq),
+            "seq": seq,
             "search_type": "0",   # 0: 일반 조건검색, 1: 실시간
             "stex_tp": "K",       # KRX
         }))
