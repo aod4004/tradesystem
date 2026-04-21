@@ -62,6 +62,7 @@ class UserKiwoomWS:
         self._subscribed: set[str] = set()
         self._running = False
         self._task: asyncio.Task | None = None
+        self.authenticated = False   # LOGIN 응답 OK 후 True. 재연결 시 False 로 리셋.
 
     async def start(self) -> None:
         if self._running:
@@ -102,6 +103,7 @@ class UserKiwoomWS:
                 await asyncio.sleep(5)
 
     async def _run(self) -> None:
+        self.authenticated = False
         token = await self.client.get_token()
         async with websockets.connect(
             self.client.ws_url,
@@ -127,6 +129,7 @@ class UserKiwoomWS:
                         f"키움 WS 로그인 실패: {msg.get('return_msg')}"
                     )
                 break
+            self.authenticated = True
             print(f"[kiwoom_ws user={self.user_id}] 로그인 성공")
 
             # 2) 주문체결(00) + 잔고(04) — 토큰 귀속, item 불필요

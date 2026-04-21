@@ -79,17 +79,17 @@ async def get_current_user(
 
 
 async def authenticate_websocket(websocket: WebSocket, token: str | None, db: AsyncSession) -> User:
-    """WS upgrade 단계에서 토큰 검증. 실패 시 연결 종료."""
+    """WS upgrade 단계에서 토큰 검증. 실패 시 WebSocketException 을 raise 해
+    Starlette 핸들러가 close 를 수행하도록 한다. 여기서 직접 close 하면 Starlette 가
+    중복 close 를 시도해 RuntimeError + ASGI 트레이스백이 로그를 오염시킨다.
+    """
     if not token:
-        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
         raise WebSocketException(code=status.WS_1008_POLICY_VIOLATION, reason="missing token")
     payload = decode_token(token)
     if not payload:
-        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
         raise WebSocketException(code=status.WS_1008_POLICY_VIOLATION, reason="invalid token")
     uid = int(payload.get("sub", 0))
     user = (await db.execute(select(User).where(User.id == uid))).scalar_one_or_none()
     if not user or not user.is_active:
-        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
         raise WebSocketException(code=status.WS_1008_POLICY_VIOLATION, reason="user inactive")
     return user
