@@ -406,3 +406,84 @@ async def update_risk_guards(
     await db.commit()
     await db.refresh(cfg)
     return _build_risk_status(cfg)
+
+
+# ---------------------------------------------------------------------- #
+#  키움 조건검색 (영웅문4 저장 조건식 기반 스크리닝 소스)
+# ---------------------------------------------------------------------- #
+
+class ConditionStatus(BaseModel):
+    seq: int | None
+    name: str | None
+
+
+class ConditionSelection(BaseModel):
+    seq: int
+    name: str
+
+
+class ConditionListResponse(BaseModel):
+    selected: ConditionStatus
+    available: list[ConditionSelection]
+
+
+class ConditionPayload(BaseModel):
+    seq: int
+    name: str = ""
+
+
+@router.get("/condition-search", response_model=ConditionListResponse)
+async def get_condition_search(
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """현재 선택된 조건식 + 서버(영웅문4) 에 저장된 조건식 목록.
+
+    조건식 목록은 유저의 키움 WS 커넥션을 통해 실시간 조회한다. WS 가 인증
+    상태가 아니면 available 은 빈 배열로 반환.
+    """
+    cfg = await _load_cfg(db, user.id)
+    selected = ConditionStatus(
+        seq=cfg.condition_seq if cfg else None,
+        name=cfg.condition_name if cfg else None,
+    )
+    available: list[ConditionSelection] = []
+    conn = kiwoom_pool.get_connection(user.id)
+    if conn is not None and conn.authenticated:
+        try:
+            items = await conn.condition_list()
+            for seq_s, name in items:
+                try:
+                    seq_i = int(seq_s)
+                except ValueError:
+                    continue
+                available.append(ConditionSelection(seq=seq_i, name=name))
+        except Exception as e:
+            print(f"[settings] user={user.id} condition_list 실패: {e}")
+    return ConditionListResponse(selected=selected, available=available)
+
+
+@router.patch("/condition-search", response_model=ConditionStatus)
+async def update_condition_search(
+    payload: ConditionPayload,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    cfg = await _get_or_create_config(db, user.id)
+    cfg.condition_seq = payload.seq
+    cfg.condition_name = payload.name or None
+    await db.commit()
+    await db.refresh(cfg)
+    return ConditionStatus(seq=cfg.condition_seq, name=cfg.condition_name)
+
+
+@router.delete("/condition-search", response_model=ConditionStatus)
+async def delete_condition_search(
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    cfg = await _get_or_create_config(db, user.id)
+    cfg.condition_seq = None
+    cfg.condition_name = None
+    await db.commit()
+    return ConditionStatus(seq=None, name=None)

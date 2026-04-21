@@ -17,7 +17,7 @@ from app.db.database import AsyncSessionLocal
 from app.db.user_config import (
     get_total_investment, get_trading_config, list_trading_users,
 )
-from app.strategy.screener import run_screening
+from app.strategy.screener import run_screening, run_condition_screening
 from app.strategy.signal import detect_buy_signals
 from app.strategy.executor import execute_pending_buy_orders
 from app.strategy.approval import summarize_pending_signals
@@ -27,16 +27,34 @@ from app.strategy.ma20 import refresh_ma20_for_active_positions
 async def job_screening():
     print("[scheduler] 종목 스크리닝 시작")
     async with AsyncSessionLocal() as db:
+        # 조건식(condition_seq)이 설정된 유저가 있으면 그 조건식으로 스크리닝.
+        # 첫 번째 설정된 유저(일반적으로 admin)의 조건식을 글로벌 소스로 사용.
+        # 설정된 유저가 없으면 기존 전종목 스크리너로 fallback.
+        users = await list_trading_users(db)
+        condition_owner = None
+        for u in users:
+            cfg = await get_trading_config(db, u.id)
+            if cfg and cfg.condition_seq is not None and cfg.kiwoom_app_key and cfg.kiwoom_secret_key:
+                condition_owner = (u.id, cfg)
+                break
+
         try:
-            await run_screening(db)
+            if condition_owner is not None:
+                uid, cfg = condition_owner
+                client = get_or_create_user_client(uid, cfg)
+                print(f"[scheduler] 조건검색 경로 — user={uid} seq={cfg.condition_seq} ({cfg.condition_name})")
+                await run_condition_screening(db, uid, client, str(cfg.condition_seq))
+            else:
+                print("[scheduler] 조건식 미설정 — 전종목 스크리너 fallback")
+                await run_screening(db)
         except Exception as e:
-            print(f"[scheduler] run_screening 실패: {e}")
+            print(f"[scheduler] 스크리닝 실패: {e}")
             notify_admins_fire(
                 f"🔥 스크리닝 작업 실패\n{type(e).__name__}: {e}",
                 dedup_key="scheduler_screening_error",
             )
             return
-        users = await list_trading_users(db)
+
         total = 0
         skipped = 0
         for u in users:

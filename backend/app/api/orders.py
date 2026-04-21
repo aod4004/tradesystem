@@ -15,7 +15,7 @@ from app.db.user_config import (
 from app.core.kiwoom_client import get_or_create_user_client
 from app.strategy.executor import calc_buy_qty, execute_pending_buy_orders
 from app.strategy.guards import check_buy_guards, notify_guard_block
-from app.strategy.screener import run_screening
+from app.strategy.screener import run_screening, run_condition_screening
 from app.strategy.signal import detect_buy_signals
 
 router = APIRouter(prefix="/api/orders", tags=["orders"])
@@ -225,10 +225,25 @@ def _snapshot_state() -> dict:
 async def _run_screening_job() -> None:
     try:
         async with AsyncSessionLocal() as db:
-            stocks = await run_screening(db, progress=_screening_state)
+            # 스케줄러와 동일한 분기 — 조건식 설정된 유저가 있으면 CNSRREQ 경로.
+            trading_users = await list_trading_users(db)
+            condition_owner = None
+            for u in trading_users:
+                cfg = await get_trading_config(db, u.id)
+                if cfg and cfg.condition_seq is not None and cfg.kiwoom_app_key and cfg.kiwoom_secret_key:
+                    condition_owner = (u.id, cfg)
+                    break
+
+            if condition_owner is not None:
+                uid, cfg = condition_owner
+                client = get_or_create_user_client(uid, cfg)
+                stocks = await run_condition_screening(
+                    db, uid, client, str(cfg.condition_seq), progress=_screening_state,
+                )
+            else:
+                stocks = await run_screening(db, progress=_screening_state)
             _screening_state["selected"] = len(stocks)
 
-            trading_users = await list_trading_users(db)
             signal_total = 0
             for u in trading_users:
                 cfg = await get_trading_config(db, u.id)

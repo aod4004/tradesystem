@@ -60,6 +60,10 @@ class UserTradingConfig(Base):
     risk_guards_enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
     # Phase 4.2 — 장 시작 전 사전 승인 모드 (True 면 08:50 자동 주문 스킵 + 승인 대기 카톡 요약)
     require_morning_approval: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    # 키움 조건검색 — 영웅문4 HTS 에 저장된 조건식 seq/name. 설정되면 매일 15:40
+    # 스크리닝을 CNSRREQ 1회 호출로 대체. NULL 이면 전종목 순회 fallback.
+    condition_seq: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    condition_name: Mapped[str | None] = mapped_column(String(50), nullable=True)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, onupdate=datetime.utcnow,
     )

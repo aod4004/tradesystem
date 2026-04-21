@@ -63,6 +63,11 @@ class UserKiwoomWS:
         self._running = False
         self._task: asyncio.Task | None = None
         self.authenticated = False   # LOGIN 응답 OK 후 True. 재연결 시 False 로 리셋.
+        # 조건검색 request-response — 메시지 루프가 응답을 가로채므로 pending Future 로 라우팅.
+        # 동일 커넥션에서 동시에 하나만 요청 가능하도록 lock 으로 직렬화.
+        self._req_lock = asyncio.Lock()
+        self._pending_cnsrlst: asyncio.Future | None = None
+        self._pending_cnsrreq: asyncio.Future | None = None
 
     async def start(self) -> None:
         if self._running:
@@ -192,6 +197,17 @@ class UserKiwoomWS:
         # 키움 WS 는 application-level PING 을 주기적으로 보낸다 — 그대로 echo 해야 끊기지 않음.
         if trnm == "PING":
             await self._send(msg)
+            return
+        # 조건검색 응답 — 요청한 쪽의 Future 에 전달
+        if trnm == "CNSRLST":
+            fut = self._pending_cnsrlst
+            if fut is not None and not fut.done():
+                fut.set_result(msg)
+            return
+        if trnm == "CNSRREQ":
+            fut = self._pending_cnsrreq
+            if fut is not None and not fut.done():
+                fut.set_result(msg)
             return
         if trnm != "REAL":
             if msg.get("return_code", 0) != 0:
@@ -452,6 +468,64 @@ class UserKiwoomWS:
             "profit_rate": float(values.get("8019") or 0),
         })
 
+    # ------------------------------------------------------------------ #
+    #  조건검색 (영웅문4 에 저장된 조건식 목록/결과 조회)
+    # ------------------------------------------------------------------ #
+    async def condition_list(self, timeout: float = 10.0) -> list[tuple[str, str]]:
+        """영웅문4 에 저장된 조건식 목록 조회 (CNSRLST).
+        반환: [(seq, name), ...]
+        """
+        if not self.authenticated or self._ws is None:
+            raise RuntimeError("키움 WS 인증 미완료 상태입니다")
+        async with self._req_lock:
+            loop = asyncio.get_event_loop()
+            fut = loop.create_future()
+            self._pending_cnsrlst = fut
+            try:
+                await self._send({"trnm": "CNSRLST"})
+                msg = await asyncio.wait_for(fut, timeout=timeout)
+            finally:
+                self._pending_cnsrlst = None
+        if msg.get("return_code", 0) != 0:
+            raise RuntimeError(f"CNSRLST 실패: {msg.get('return_msg')}")
+        out: list[tuple[str, str]] = []
+        for item in msg.get("data") or []:
+            if isinstance(item, (list, tuple)) and len(item) >= 2:
+                out.append((str(item[0]), str(item[1])))
+            elif isinstance(item, dict):
+                out.append((str(item.get("seq", "")), str(item.get("name", ""))))
+        return out
+
+    async def condition_search(
+        self,
+        seq: str,
+        *,
+        stex_tp: str = "K",
+        timeout: float = 20.0,
+    ) -> list[dict]:
+        """조건식 seq 로 일반(비실시간) 검색 (CNSRREQ).
+        반환: [{'9001': code, '302': name, '10': price, ...}, ...]  — 키움 원본 필드.
+        """
+        if not self.authenticated or self._ws is None:
+            raise RuntimeError("키움 WS 인증 미완료 상태입니다")
+        async with self._req_lock:
+            loop = asyncio.get_event_loop()
+            fut = loop.create_future()
+            self._pending_cnsrreq = fut
+            try:
+                await self._send({
+                    "trnm": "CNSRREQ",
+                    "seq": str(seq),
+                    "search_type": "0",
+                    "stex_tp": stex_tp,
+                })
+                msg = await asyncio.wait_for(fut, timeout=timeout)
+            finally:
+                self._pending_cnsrreq = None
+        if msg.get("return_code", 0) != 0:
+            raise RuntimeError(f"CNSRREQ 실패: {msg.get('return_msg')}")
+        return msg.get("data") or []
+
 
 class KiwoomPool:
     """유저별 UserKiwoomWS 관리 + 글로벌 MA 캐시"""
@@ -507,6 +581,24 @@ class KiwoomPool:
         conn = self._connections.get(user_id)
         if conn is not None:
             await conn.subscribe_price(stock_code)
+
+    # ------------------------------------------------------------------ #
+    #  조건검색 — 해당 유저의 인증된 WS 커넥션 위에서 수행
+    # ------------------------------------------------------------------ #
+    def get_connection(self, user_id: int) -> UserKiwoomWS | None:
+        return self._connections.get(user_id)
+
+    async def condition_list(self, user_id: int) -> list[tuple[str, str]]:
+        conn = self._connections.get(user_id)
+        if conn is None:
+            raise RuntimeError(f"유저 {user_id} 의 키움 WS 커넥션이 없습니다")
+        return await conn.condition_list()
+
+    async def condition_search(self, user_id: int, seq: str) -> list[dict]:
+        conn = self._connections.get(user_id)
+        if conn is None:
+            raise RuntimeError(f"유저 {user_id} 의 키움 WS 커넥션이 없습니다")
+        return await conn.condition_search(seq)
 
     # ------------------------------------------------------------------ #
     #  글로벌 MA 캐시 (시장 데이터, 모든 유저 공용)
