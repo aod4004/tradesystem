@@ -1,6 +1,6 @@
 import { useState, useCallback } from 'react'
-import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { fetchPositions } from '../api/client'
+import { useQuery, useQueryClient, useMutation } from '@tanstack/react-query'
+import { fetchPositions, reconcilePositions } from '../api/client'
 import { Position, WsMessage } from '../types'
 import { useRealtimeWs } from '../hooks/useRealtimeWs'
 
@@ -14,6 +14,22 @@ export default function PortfolioTable() {
 
   // 실시간 가격 상태
   const [prices, setPrices] = useState<Record<string, number>>({})
+
+  // 잔고 → DB positions 동기화 — WS 체결 이벤트를 놓친 과거 보유 종목 복구용.
+  const [syncMsg, setSyncMsg] = useState<string | null>(null)
+  const syncMutation = useMutation({
+    mutationFn: reconcilePositions,
+    onSuccess: (r) => {
+      setSyncMsg(`동기화 완료 — 생성 ${r.created} · 갱신 ${r.updated} · 청산 ${r.closed} (잔고 ${r.total_holdings}종목)`)
+      qc.invalidateQueries({ queryKey: ['positions'] })
+      qc.invalidateQueries({ queryKey: ['balance'] })
+      setTimeout(() => setSyncMsg(null), 5000)
+    },
+    onError: (e: any) => {
+      setSyncMsg(`실패: ${e?.response?.data?.detail ?? e.message}`)
+      setTimeout(() => setSyncMsg(null), 5000)
+    },
+  })
 
   const handleWsMsg = useCallback((msg: WsMessage) => {
     if (msg.type === 'price_update') {
@@ -39,9 +55,22 @@ export default function PortfolioTable() {
 
   return (
     <div className="bg-gray-800 rounded-xl p-4 mb-6">
-      <h2 className="text-lg font-bold text-white mb-3">
-        보유 종목 <span className="text-sm text-gray-400">({positions.length}개)</span>
-      </h2>
+      <div className="flex items-center justify-between mb-3">
+        <h2 className="text-lg font-bold text-white">
+          보유 종목 <span className="text-sm text-gray-400">({positions.length}개)</span>
+        </h2>
+        <div className="flex items-center gap-3">
+          {syncMsg && <span className="text-xs text-gray-300">{syncMsg}</span>}
+          <button
+            onClick={() => syncMutation.mutate()}
+            disabled={syncMutation.isPending}
+            className="text-xs px-3 py-1 rounded bg-blue-600 hover:bg-blue-500 disabled:bg-gray-600 text-white"
+            title="키움 잔고에서 DB 보유종목을 다시 맞춥니다 (체결 이벤트 누락 복구용)"
+          >
+            {syncMutation.isPending ? '동기화 중…' : '잔고에서 동기화'}
+          </button>
+        </div>
+      </div>
       <div className="overflow-x-auto">
         <table className="w-full text-sm text-gray-300">
           <thead>
