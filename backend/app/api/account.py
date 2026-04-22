@@ -9,6 +9,7 @@ from app.core.kiwoom_client import get_or_create_user_client, to_int, to_float
 from app.db.database import get_db
 from app.db.models import Position, PositionStatus, User, UserTradingConfig
 from app.db.user_config import get_total_investment
+from app.strategy.ma20 import compute_and_cache_ma
 from app.ws.kiwoom_ws import kiwoom_pool
 
 router = APIRouter(prefix="/api/account", tags=["account"])
@@ -197,12 +198,16 @@ async def reconcile_positions(
 
     await db.commit()
 
-    # 새 포지션에 실시간 가격 구독 추가 (best-effort — WS 미연결이어도 실패 안 함)
+    # 새 포지션에 실시간 가격 구독 + MA 캐시 주입 (best-effort — WS 미연결이어도 실패 안 함)
     for code in new_codes_to_subscribe:
         try:
             await kiwoom_pool.subscribe_price(user.id, code)
         except Exception as e:
             print(f"[reconcile] user={user.id} {code} 시세 구독 실패: {e}")
+        try:
+            await compute_and_cache_ma(code, client)
+        except Exception as e:
+            print(f"[reconcile] user={user.id} {code} MA 계산 실패: {e}")
 
     return {
         "created": created,

@@ -36,6 +36,7 @@ from app.db.database import AsyncSessionLocal
 from app.db.models import Position, Order, OrderType, PositionStatus, OrderStatus
 from app.strategy.signal import check_sell_signal, check_extra_buy_signal
 from app.strategy.executor import execute_sell_order, execute_extra_buy_order
+from app.strategy.ma20 import compute_and_cache_ma
 from app.ws.manager import manager
 
 
@@ -109,6 +110,9 @@ class UserKiwoomWS:
 
     async def _run(self) -> None:
         self.authenticated = False
+        # 재연결 시 이전 커넥션의 구독 목록을 비워야 _subscribe_active_positions 가
+        # subscribe_price 의 "이미 구독됨" 스킵 로직에 막히지 않는다. 새 WS 는 구독 상태가 없음.
+        self._subscribed.clear()
         token = await self.client.get_token()
         async with websockets.connect(
             self.client.ws_url,
@@ -349,6 +353,7 @@ class UserKiwoomWS:
                         )
                     )
                 ).scalar_one_or_none()
+            is_new_position = False
             if position is None and order.order_type == OrderType.BUY:
                 position = Position(
                     user_id=order.user_id,
@@ -362,6 +367,7 @@ class UserKiwoomWS:
                 )
                 db.add(position)
                 await db.flush()
+                is_new_position = True
             if position is None:
                 await db.commit()
                 return
@@ -379,8 +385,12 @@ class UserKiwoomWS:
                         position.buy_rounds_done = order.order_round
                 if order.order_round == 0 and order.status == OrderStatus.FILLED:
                     position.extra_buy_rounds += 1
-                # 새 포지션이 생겼으면 실시간 구독 추가 (기존 포지션은 이미 구독 중)
+                # 새 포지션이 생겼으면 실시간 구독 추가 (기존 포지션은 이미 구독 중 — subscribe_price 는 멱등)
                 await self.subscribe_price(position.stock_code)
+                # 신규 포지션이면 MA 캐시 즉시 계산 — 08:30 배치는 매수 체결 이전 스냅샷이라 당일 매수 종목은 빠짐.
+                # 동기 대기하면 체결 이벤트 응답이 느려지므로 태스크로 분리.
+                if is_new_position:
+                    asyncio.create_task(compute_and_cache_ma(position.stock_code, self.client))
             else:  # SELL
                 position.quantity = max(0, position.quantity - qty)
                 if order.order_round > 0 and order.status == OrderStatus.FILLED:

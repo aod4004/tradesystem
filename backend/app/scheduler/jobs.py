@@ -2,9 +2,9 @@
 스케줄러 — APScheduler 기반 자동 작업
 
 스케줄:
+  08:30  보유 종목 MA 캐시 갱신 (전일 종가 포함 — 장중 MA 터치 매도 즉시 평가)
   08:50  장 시작 전 매수 주문 자동 전송 (유저별 루프, 각 유저 키움 키 사용)
   15:40  장 마감 후 종목 스크리닝(글로벌, 시스템 키) + 유저별 매수 신호 감지(유저 키)
-  15:50  보유 종목 MA 캐시 갱신 (MA20/60/120 터치 매도 조건용, 시스템 키)
 """
 from datetime import datetime
 
@@ -154,6 +154,12 @@ def create_scheduler() -> AsyncIOScheduler:
     scheduler = AsyncIOScheduler(timezone="Asia/Seoul")
 
     scheduler.add_job(
+        job_refresh_ma20,
+        CronTrigger(day_of_week="mon-fri", hour=8, minute=30, timezone="Asia/Seoul"),
+        id="refresh_ma20",
+        replace_existing=True,
+    )
+    scheduler.add_job(
         job_morning_orders,
         CronTrigger(day_of_week="mon-fri", hour=8, minute=50, timezone="Asia/Seoul"),
         id="morning_orders",
@@ -163,12 +169,6 @@ def create_scheduler() -> AsyncIOScheduler:
         job_screening,
         CronTrigger(day_of_week="mon-fri", hour=15, minute=40, timezone="Asia/Seoul"),
         id="screening",
-        replace_existing=True,
-    )
-    scheduler.add_job(
-        job_refresh_ma20,
-        CronTrigger(day_of_week="mon-fri", hour=15, minute=50, timezone="Asia/Seoul"),
-        id="refresh_ma20",
         replace_existing=True,
     )
 
