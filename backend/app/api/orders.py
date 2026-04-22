@@ -234,13 +234,24 @@ async def _run_screening_job() -> None:
                     condition_owner = (u.id, cfg)
                     break
 
+            stocks = None
             if condition_owner is not None:
                 uid, cfg = condition_owner
                 client = get_or_create_user_client(uid, cfg)
-                stocks = await run_condition_screening(
-                    db, uid, client, str(cfg.condition_seq), progress=_screening_state,
-                )
-            else:
+                try:
+                    stocks = await run_condition_screening(
+                        db, uid, client, str(cfg.condition_seq), progress=_screening_state,
+                    )
+                except Exception as e:
+                    # 조건검색 실패 시 전종목 스크리너로 자동 fallback. 15:40 전체 실패 방지.
+                    err = f"{type(e).__name__}: {e}" or type(e).__name__
+                    print(f"[orders] 조건검색 실패 — 전종목 스크리너로 fallback: {err}")
+                    _screening_state["error"] = f"condition_fallback: {err}"
+                    # progress 리셋 (전종목은 카운트가 다름)
+                    _screening_state["total"] = 0
+                    _screening_state["processed"] = 0
+                    _screening_state["selected"] = 0
+            if stocks is None:
                 stocks = await run_screening(db, progress=_screening_state)
             _screening_state["selected"] = len(stocks)
 
@@ -254,15 +265,15 @@ async def _run_screening_job() -> None:
                     signals = await detect_buy_signals(db, u.id, client)
                     signal_total += len(signals)
                 except Exception as e:
-                    print(f"[orders] 유저 {u.id} 신호 감지 실패: {e}")
+                    print(f"[orders] 유저 {u.id} 신호 감지 실패: {type(e).__name__}: {e}")
 
             _screening_state["signal_count"] = signal_total
             _screening_state["user_count"] = len(trading_users)
             _screening_state["status"] = "completed"
     except Exception as e:
         _screening_state["status"] = "error"
-        _screening_state["error"] = str(e)
-        print(f"[orders] 스크리닝 잡 실패: {e}")
+        _screening_state["error"] = f"{type(e).__name__}: {e}" or type(e).__name__
+        print(f"[orders] 스크리닝 잡 실패: {type(e).__name__}: {e!r}")
     finally:
         _screening_state["finished_at"] = datetime.utcnow().isoformat()
 

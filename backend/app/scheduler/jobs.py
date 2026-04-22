@@ -43,12 +43,22 @@ async def job_screening():
                 uid, cfg = condition_owner
                 client = get_or_create_user_client(uid, cfg)
                 print(f"[scheduler] 조건검색 경로 — user={uid} seq={cfg.condition_seq} ({cfg.condition_name})")
-                await run_condition_screening(db, uid, client, str(cfg.condition_seq))
+                try:
+                    await run_condition_screening(db, uid, client, str(cfg.condition_seq))
+                except Exception as e:
+                    # 조건검색 실패(WS 인증/타임아웃/조건 삭제 등) 시 전종목 스크리너로 자동 fallback.
+                    err = f"{type(e).__name__}: {e}"
+                    print(f"[scheduler] 조건검색 실패 — 전종목 스크리너로 fallback: {err}")
+                    notify_admins_fire(
+                        f"⚠️ 조건검색 실패 → 전종목 스크리너 fallback\n{err}",
+                        dedup_key=f"scheduler_condition_fallback:{datetime.utcnow().strftime('%Y-%m-%d')}",
+                    )
+                    await run_screening(db)
             else:
                 print("[scheduler] 조건식 미설정 — 전종목 스크리너 fallback")
                 await run_screening(db)
         except Exception as e:
-            print(f"[scheduler] 스크리닝 실패: {e}")
+            print(f"[scheduler] 스크리닝 실패: {type(e).__name__}: {e!r}")
             notify_admins_fire(
                 f"🔥 스크리닝 작업 실패\n{type(e).__name__}: {e}",
                 dedup_key="scheduler_screening_error",

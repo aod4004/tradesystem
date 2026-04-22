@@ -517,7 +517,7 @@ class UserKiwoomWS:
         반환: [{'9001': code, '302': name, '10': price, ...}, ...]  — 키움 원본 필드.
         """
         if not self.authenticated or self._ws is None:
-            raise RuntimeError("키움 WS 인증 미완료 상태입니다")
+            raise RuntimeError("키움 WS 인증 미완료 상태 (authenticated=False 또는 소켓 없음)")
         async with self._req_lock:
             loop = asyncio.get_event_loop()
             fut = loop.create_future()
@@ -529,11 +529,17 @@ class UserKiwoomWS:
                     "search_type": "0",
                     "stex_tp": stex_tp,
                 })
-                msg = await asyncio.wait_for(fut, timeout=timeout)
+                try:
+                    msg = await asyncio.wait_for(fut, timeout=timeout)
+                except asyncio.TimeoutError:
+                    raise RuntimeError(
+                        f"CNSRREQ 응답 없음 — {timeout}초 타임아웃 "
+                        f"(seq={seq}, user={self.user_id}). 키움 WS 재연결 또는 조건식 유효성 확인 필요."
+                    )
             finally:
                 self._pending_cnsrreq = None
         if msg.get("return_code", 0) != 0:
-            raise RuntimeError(f"CNSRREQ 실패: {msg.get('return_msg')}")
+            raise RuntimeError(f"CNSRREQ 실패 (seq={seq}): return_code={msg.get('return_code')} {msg.get('return_msg')}")
         return msg.get("data") or []
 
 
