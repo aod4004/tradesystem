@@ -162,8 +162,23 @@ class UserKiwoomWS:
             # 3) 이 유저의 보유 종목 실시간 체결(0B) 구독
             await self._subscribe_active_positions()
 
+            # 4) 조건검색 priming — 키움 모의 WS 는 세션당 CNSRLST 를 최소 1회
+            #    수신해야 같은 세션의 CNSRREQ 가 응답하는 것으로 관측.
+            #    메시지 루프가 돌아야 응답 처리 가능하므로 background task 로 분리.
+            asyncio.create_task(self._prime_condition_search())
+
             async for raw in ws:
                 await self._handle_message(raw)
+
+    async def _prime_condition_search(self) -> None:
+        """재연결 시마다 1회 CNSRLST 호출해 조건검색 응답 경로를 활성화."""
+        try:
+            await asyncio.sleep(0.5)   # 메시지 루프 진입 대기
+            items = await self.condition_list(timeout=10.0)
+            print(f"[kiwoom_ws user={self.user_id}] 조건검색 priming — {len(items)}개 조건식 수신")
+        except Exception as e:
+            # priming 실패해도 다른 기능엔 영향 없음. 로그만 남김.
+            print(f"[kiwoom_ws user={self.user_id}] 조건검색 priming 실패: {type(e).__name__}: {e}")
 
     async def _send(self, msg: dict) -> None:
         if self._ws is not None:
@@ -560,7 +575,7 @@ class UserKiwoomWS:
         seq: str,
         *,
         stex_tp: str = "K",
-        timeout: float = 20.0,
+        timeout: float = 30.0,
     ) -> list[dict]:
         """조건식 seq 로 일반(비실시간) 검색 (CNSRREQ).
         반환: [{'9001': code, '302': name, '10': price, ...}, ...]  — 키움 원본 필드.
