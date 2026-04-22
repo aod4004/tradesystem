@@ -171,6 +171,12 @@ class UserKiwoomWS:
             self.last_send_at = datetime.utcnow()
             self.send_count += 1
 
+    # 키움 WS 는 TRNM=REG 에 rate limit 이 있다 (rc=105110: 허용 요청 건수 초과).
+    # 종목당 REG 를 개별로 보내면 20+개 포지션에서 바로 limit 에 걸려 뒤따르는
+    # CNSRREQ 등 다른 전문까지 응답 유실. data.item 에 여러 종목을 한 번에
+    # 실어 한 번의 REG 로 모두 구독하는 게 안전.
+    _REG_BATCH_SIZE = 50
+
     async def _subscribe_active_positions(self) -> None:
         async with AsyncSessionLocal() as db:
             positions = (
@@ -181,10 +187,20 @@ class UserKiwoomWS:
                     )
                 )
             ).scalars().all()
-        for pos in positions:
-            await self.subscribe_price(pos.stock_code)
+        codes = [p.stock_code for p in positions if p.stock_code and p.stock_code not in self._subscribed]
+        if not codes:
+            return
+        for i in range(0, len(codes), self._REG_BATCH_SIZE):
+            chunk = codes[i:i + self._REG_BATCH_SIZE]
+            await self._send({
+                "trnm": "REG", "grp_no": "2", "refresh": "1",
+                "data": [{"item": chunk, "type": ["0B"]}],
+            })
+            self._subscribed.update(chunk)
 
     async def subscribe_price(self, stock_code: str) -> None:
+        """신규 1종목 구독 (체결 이벤트로 새 포지션 생겼을 때 호출).
+        여러 종목 동시 구독이 필요하면 _subscribe_active_positions 가 배치로 처리."""
         if stock_code in self._subscribed or self._ws is None:
             return
         await self._send({

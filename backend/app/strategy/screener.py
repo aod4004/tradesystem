@@ -270,7 +270,20 @@ async def run_condition_screening(
     await db.commit()
 
     print(f"[condition_screener] user={user_id} seq={condition_seq} — CNSRREQ 요청")
-    raw_items = await kiwoom_pool.condition_search(user_id, condition_seq)
+    # CNSRREQ 는 WS 혼잡/일시 장애 시 타임아웃 가능 — 최대 2회 재시도 (2s 백오프).
+    raw_items = None
+    last_err: Exception | None = None
+    for attempt in range(3):
+        try:
+            raw_items = await kiwoom_pool.condition_search(user_id, condition_seq)
+            break
+        except Exception as e:
+            last_err = e
+            print(f"[condition_screener] CNSRREQ 시도 {attempt + 1}/3 실패: {type(e).__name__}: {e}")
+            if attempt < 2:
+                await asyncio.sleep(2.0 * (attempt + 1))
+    if raw_items is None:
+        raise RuntimeError(f"CNSRREQ 3회 재시도 실패: {last_err}") from last_err
     print(f"[condition_screener] CNSRREQ 결과 {len(raw_items)}개 — ka10001 보강 시작")
 
     if progress is not None:
