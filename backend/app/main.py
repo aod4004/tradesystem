@@ -150,14 +150,35 @@ async def health():
     # 키움 WS 풀 ----
     # authenticated 별도 노출 — 단순히 커넥션이 맺혔는지가 아니라 LOGIN 전문까지
     # 통과한 유저 수. REG 응답 오류(로그인 인증 미완료) 진단용.
+    # per-user 상세: recv/send 카운트 + 마지막 수신 시간 — CNSRREQ 타임아웃 등 진단용.
     conns = list(kiwoom_pool._connections.values())
     authed_users = [c.user_id for c in conns if getattr(c, "authenticated", False)]
+
+    def _iso(dt):
+        return dt.isoformat() + "Z" if dt else None
+
+    per_user = [
+        {
+            "user_id": c.user_id,
+            "authenticated": bool(getattr(c, "authenticated", False)),
+            "subscribed": len(getattr(c, "_subscribed", []) or []),
+            "recv_count": int(getattr(c, "recv_count", 0) or 0),
+            "send_count": int(getattr(c, "send_count", 0) or 0),
+            "last_recv_at": _iso(getattr(c, "last_recv_at", None)),
+            "last_send_at": _iso(getattr(c, "last_send_at", None)),
+            "last_connected_at": _iso(getattr(c, "last_connected_at", None)),
+            "pending_cnsrreq": bool(getattr(c, "_pending_cnsrreq", None) is not None),
+            "pending_cnsrlst": bool(getattr(c, "_pending_cnsrlst", None) is not None),
+        }
+        for c in conns
+    ]
     components["kiwoom_ws_pool"] = {
         "ok": len(authed_users) == len(conns),
         "connections": len(conns),
         "authenticated": len(authed_users),
         "users": sorted(kiwoom_pool._connections.keys()),
         "authenticated_users": sorted(authed_users),
+        "per_user": per_user,
     }
 
     # 알림(카카오) ----

@@ -69,6 +69,12 @@ class UserKiwoomWS:
         self._req_lock = asyncio.Lock()
         self._pending_cnsrlst: asyncio.Future | None = None
         self._pending_cnsrreq: asyncio.Future | None = None
+        # 관측성 — health 에 노출 + CNSRREQ 타임아웃 원인 진단용.
+        self.last_recv_at: datetime | None = None
+        self.last_send_at: datetime | None = None
+        self.recv_count = 0
+        self.send_count = 0
+        self.last_connected_at: datetime | None = None
 
     async def start(self) -> None:
         if self._running:
@@ -113,6 +119,11 @@ class UserKiwoomWS:
         # 재연결 시 이전 커넥션의 구독 목록을 비워야 _subscribe_active_positions 가
         # subscribe_price 의 "이미 구독됨" 스킵 로직에 막히지 않는다. 새 WS 는 구독 상태가 없음.
         self._subscribed.clear()
+        # 재연결로 이전 커넥션 위의 pending 요청은 어차피 응답 못 받으니 즉시 실패 처리.
+        for fut_attr in ("_pending_cnsrreq", "_pending_cnsrlst"):
+            fut = getattr(self, fut_attr, None)
+            if fut is not None and not fut.done():
+                fut.set_exception(RuntimeError("키움 WS 재연결로 요청 취소됨"))
         token = await self.client.get_token()
         async with websockets.connect(
             self.client.ws_url,
@@ -139,6 +150,7 @@ class UserKiwoomWS:
                     )
                 break
             self.authenticated = True
+            self.last_connected_at = datetime.utcnow()
             print(f"[kiwoom_ws user={self.user_id}] 로그인 성공")
 
             # 2) 주문체결(00) + 잔고(04) — 토큰 귀속, item 불필요
@@ -156,6 +168,8 @@ class UserKiwoomWS:
     async def _send(self, msg: dict) -> None:
         if self._ws is not None:
             await self._ws.send(json.dumps(msg))
+            self.last_send_at = datetime.utcnow()
+            self.send_count += 1
 
     async def _subscribe_active_positions(self) -> None:
         async with AsyncSessionLocal() as db:
@@ -197,6 +211,9 @@ class UserKiwoomWS:
         except Exception:
             return
 
+        self.last_recv_at = datetime.utcnow()
+        self.recv_count += 1
+
         trnm = msg.get("trnm")
         # 키움 WS 는 application-level PING 을 주기적으로 보낸다 — 그대로 echo 해야 끊기지 않음.
         if trnm == "PING":
@@ -214,8 +231,19 @@ class UserKiwoomWS:
                 fut.set_result(msg)
             return
         if trnm != "REAL":
-            if msg.get("return_code", 0) != 0:
-                print(f"[kiwoom_ws user={self.user_id}] {trnm} 응답 오류: {msg.get('return_msg')}")
+            rc = msg.get("return_code", 0)
+            if rc != 0:
+                print(f"[kiwoom_ws user={self.user_id}] {trnm} 응답 오류: rc={rc} {msg.get('return_msg')}")
+                # pending 조건검색 요청이 있는데 return_code 가 다른 trnm 으로 실려오는 경우
+                # (키움이 일관되게 trnm 을 맞춰 보내지 않는 케이스 방어). future 를 실패시켜 20초 대기 안 하도록.
+                if self._pending_cnsrreq is not None and not self._pending_cnsrreq.done():
+                    self._pending_cnsrreq.set_exception(
+                        RuntimeError(f"CNSRREQ 요청 중 이상 응답 (trnm={trnm} rc={rc} {msg.get('return_msg')})")
+                    )
+                if self._pending_cnsrlst is not None and not self._pending_cnsrlst.done():
+                    self._pending_cnsrlst.set_exception(
+                        RuntimeError(f"CNSRLST 요청 중 이상 응답 (trnm={trnm} rc={rc} {msg.get('return_msg')})")
+                    )
             return
 
         for item in msg.get("data", []) or []:
@@ -518,6 +546,12 @@ class UserKiwoomWS:
         """
         if not self.authenticated or self._ws is None:
             raise RuntimeError("키움 WS 인증 미완료 상태 (authenticated=False 또는 소켓 없음)")
+        last_recv_s = (datetime.utcnow() - self.last_recv_at).total_seconds() if self.last_recv_at else None
+        print(
+            f"[kiwoom_ws user={self.user_id}] CNSRREQ 전송 준비 — "
+            f"authenticated={self.authenticated} recv={self.recv_count} send={self.send_count} "
+            f"last_recv_before={last_recv_s}s"
+        )
         async with self._req_lock:
             loop = asyncio.get_event_loop()
             fut = loop.create_future()
@@ -532,9 +566,11 @@ class UserKiwoomWS:
                 try:
                     msg = await asyncio.wait_for(fut, timeout=timeout)
                 except asyncio.TimeoutError:
+                    recv_after = self.recv_count
                     raise RuntimeError(
                         f"CNSRREQ 응답 없음 — {timeout}초 타임아웃 "
-                        f"(seq={seq}, user={self.user_id}). 키움 WS 재연결 또는 조건식 유효성 확인 필요."
+                        f"(seq={seq}, user={self.user_id}, recv={recv_after}, "
+                        f"last_recv_before={last_recv_s}s). 키움 WS 재연결 또는 조건식 유효성 확인 필요."
                     )
             finally:
                 self._pending_cnsrreq = None

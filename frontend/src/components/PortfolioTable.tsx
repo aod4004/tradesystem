@@ -3,9 +3,11 @@ import { useQuery, useQueryClient, useMutation } from '@tanstack/react-query'
 import { fetchPositions, reconcilePositions } from '../api/client'
 import { Position, WsMessage } from '../types'
 import { useRealtimeWs } from '../hooks/useRealtimeWs'
+import { useAuth } from '../context/AuthContext'
 
 export default function PortfolioTable() {
   const qc = useQueryClient()
+  const { token, logout } = useAuth()
   const { data: positions = [] } = useQuery<Position[]>({
     queryKey: ['positions'],
     queryFn: fetchPositions,
@@ -49,7 +51,7 @@ export default function PortfolioTable() {
     }
   }, [qc])
 
-  useRealtimeWs(handleWsMsg)
+  useRealtimeWs(handleWsMsg, token, logout)
 
   const SELL_LABELS = ['5%', '10%', '15%', '20%', 'MA20']
 
