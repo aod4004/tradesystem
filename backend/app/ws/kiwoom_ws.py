@@ -260,6 +260,11 @@ class UserKiwoomWS:
                     self._pending_cnsrlst.set_exception(
                         RuntimeError(f"CNSRLST 요청 중 이상 응답 (trnm={trnm} rc={rc} {msg.get('return_msg')})")
                     )
+            elif trnm not in ("REG", "REMOVE"):
+                # 미처리 trnm + 성공(rc=0) — CNSRREQ 타임아웃 원인 추적용 진단 로그.
+                # REG/REMOVE 성공 응답은 정상 케이스라 제외.
+                snippet = (raw[:400]).replace("\n", " ")
+                print(f"[kiwoom_ws user={self.user_id}] rx unhandled trnm={trnm} rc=0 raw={snippet}")
             return
 
         for item in msg.get("data", []) or []:
