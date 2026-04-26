@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { Fragment, useMemo, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   approvePendingSignals, fetchMorningApproval,
@@ -64,6 +64,20 @@ export default function OrderList() {
 
   const approvalOn = !!approval?.enabled
   const pendingCount = signals.filter(s => !s.is_excluded).length
+
+  // 주문 이력을 KST 날짜별로 그룹핑. orders 가 created_at desc 정렬이라
+  // 그룹 순서도 자연스럽게 최신부터. sv-SE locale 은 ISO 형식(YYYY-MM-DD).
+  const groupedOrders = useMemo(() => {
+    const fmt = new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Seoul' })
+    const groups: { date: string; orders: OrderRecord[] }[] = []
+    for (const o of orders) {
+      const d = fmt.format(new Date(o.created_at))
+      const last = groups[groups.length - 1]
+      if (!last || last.date !== d) groups.push({ date: d, orders: [o] })
+      else last.orders.push(o)
+    }
+    return groups
+  }, [orders])
 
   return (
     <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
@@ -147,7 +161,7 @@ export default function OrderList() {
         <h2 className="text-lg font-bold text-white mb-3">주문 이력</h2>
         <div className="overflow-y-auto max-h-64">
           <table className="w-full text-sm text-gray-300">
-            <thead>
+            <thead className="sticky top-0 z-10 bg-gray-800">
               <tr className="text-gray-400 border-b border-gray-700">
                 {['종목', '구분', '차수', '가격', '수량', '상태'].map(h => (
                   <th key={h} className="py-1 px-2 text-right first:text-left">{h}</th>
@@ -155,20 +169,35 @@ export default function OrderList() {
               </tr>
             </thead>
             <tbody>
-              {orders.map(o => (
-                <tr key={o.id} className="border-b border-gray-700">
-                  <td className="py-1 px-2 text-white">{o.stock_code}</td>
-                  <td className={`py-1 px-2 text-right font-bold ${o.order_type === 'buy' ? 'text-red-400' : 'text-blue-400'}`}>
-                    {o.order_type === 'buy' ? '매수' : '매도'}
-                  </td>
-                  <td className="py-1 px-2 text-right">{o.order_round}차</td>
-                  <td className="py-1 px-2 text-right">{o.order_price.toLocaleString()}</td>
-                  <td className="py-1 px-2 text-right">{o.order_qty}</td>
-                  <td className={`py-1 px-2 text-right ${STATUS_COLORS[o.status] ?? ''}`}>
-                    {STATUS_LABELS[o.status] ?? o.status}
-                  </td>
-                </tr>
+              {groupedOrders.map(g => (
+                <Fragment key={g.date}>
+                  <tr className="bg-gray-900/70">
+                    <td colSpan={6} className="py-1 px-2 text-xs text-gray-400 font-medium">
+                      {g.date} <span className="text-gray-500">({g.orders.length}건)</span>
+                    </td>
+                  </tr>
+                  {g.orders.map(o => (
+                    <tr key={o.id} className="border-b border-gray-700">
+                      <td className="py-1 px-2">
+                        <span className="font-medium text-white">{o.stock_name || o.stock_code}</span>
+                        <span className="ml-1 text-xs text-gray-500">{o.stock_code}</span>
+                      </td>
+                      <td className={`py-1 px-2 text-right font-bold ${o.order_type === 'buy' ? 'text-red-400' : 'text-blue-400'}`}>
+                        {o.order_type === 'buy' ? '매수' : '매도'}
+                      </td>
+                      <td className="py-1 px-2 text-right">{o.order_round}차</td>
+                      <td className="py-1 px-2 text-right">{o.order_price.toLocaleString()}</td>
+                      <td className="py-1 px-2 text-right">{o.order_qty}</td>
+                      <td className={`py-1 px-2 text-right ${STATUS_COLORS[o.status] ?? ''}`}>
+                        {STATUS_LABELS[o.status] ?? o.status}
+                      </td>
+                    </tr>
+                  ))}
+                </Fragment>
               ))}
+              {orders.length === 0 && (
+                <tr><td colSpan={6} className="text-center py-4 text-gray-500">주문 이력 없음</td></tr>
+              )}
             </tbody>
           </table>
         </div>
