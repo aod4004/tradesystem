@@ -40,6 +40,19 @@ from app.strategy.ma20 import compute_and_cache_ma
 from app.ws.manager import manager
 
 
+# 재연결 백오프 — 일반 오류는 짧게(네트워크 일시단절은 빨리 복구).
+# 인증 실패는 길게(8005 등 토큰/키 무효는 즉시 재시도해도 같은 결과).
+_RECONNECT_BACKOFF_LADDER = (5, 15, 45, 120, 300)
+_AUTH_FAIL_BACKOFF_LADDER = (60, 120, 300, 600, 600)
+# 연속 LOGIN 인증 실패 N회 누적 시 영구 정지 — 키 재등록(PUT /kiwoom-keys) 전엔
+# 자동 재시작 안 함. 키움 콘솔에서 키 재발급이 필요한 상황의 무한 시도 방지.
+_AUTH_FAILURE_HARD_STOP_THRESHOLD = 5
+
+
+class _AuthFailure(RuntimeError):
+    """LOGIN return_code != 0 — 키/토큰 무효 가능성. 일반 예외와 분리해 백오프/dedup 차별화."""
+
+
 def _sell_trigger_label(bit: int) -> str:
     """Position.sold_triggers / Order.sell_trigger_bit 비트를 사람이 읽을 라벨로."""
     n_ratios = len(settings.SELL_RATIOS)
@@ -75,6 +88,11 @@ class UserKiwoomWS:
         self.recv_count = 0
         self.send_count = 0
         self.last_connected_at: datetime | None = None
+        # 인증 실패 누적/영구정지 — _AUTH_FAILURE_HARD_STOP_THRESHOLD 회 누적 시
+        # _running=False 로 루프 종료. 키 재등록(connect_user) 시 새 인스턴스로 자동 재시작.
+        self.auth_failure_count: int = 0
+        self.last_auth_error: str | None = None
+        self.permanently_stopped: bool = False
 
     async def start(self) -> None:
         if self._running:
@@ -100,19 +118,111 @@ class UserKiwoomWS:
         self._subscribed.clear()
 
     async def _connect_loop(self) -> None:
+        # 알림 dedup TTL — 백오프(60s+) 가 dedup TTL(60s 기본) 보다 길면 같은 키가
+        # 만료된 직후 또 발송되므로 24시간으로 명시. 날짜 prefix 와 결합되어
+        # 사실상 "하루 1회" 보장.
+        DEDUP_TTL_24H = 86400
         while self._running:
+            had_error = False
+            is_auth_failure = False
+            err_msg: str = ""
             try:
                 await self._run()
             except asyncio.CancelledError:
                 break
+            except _AuthFailure as e:
+                had_error = True
+                is_auth_failure = True
+                err_msg = str(e)
+                self.auth_failure_count += 1
+                self.last_auth_error = err_msg
             except Exception as e:
-                print(f"[kiwoom_ws user={self.user_id}] 연결 오류: {e} — 5초 후 재연결")
+                had_error = True
+                err_msg = f"{type(e).__name__}: {e}"
+
+            if not self._running:
+                break
+
+            # _run() 정상 종료 (예외 없이 ws 가 close 된 경우) — 즉시 다음 사이클.
+            # 백오프/알림 없음. 기존 동작 보존.
+            if not had_error:
+                continue
+
+            today = datetime.utcnow().strftime("%Y-%m-%d")
+
+            # 영구 정지 — 연속 인증 실패 임계 누적 시 루프 종료.
+            # 키 재등록(PUT /kiwoom-keys → kiwoom_pool.connect_user) 이 새 인스턴스로 자동 재시작.
+            if self.auth_failure_count >= _AUTH_FAILURE_HARD_STOP_THRESHOLD:
+                self.permanently_stopped = True
+                self._running = False
+                print(
+                    f"[kiwoom_ws user={self.user_id}] 인증 실패 "
+                    f"{self.auth_failure_count}회 누적 — WS 루프 영구 정지. 키 재등록 필요."
+                )
                 notify_user_fire(
                     self.user_id,
-                    f"⚠️ 키움 실시간 연결 오류\n{e}\n5초 후 재연결 시도합니다.",
-                    dedup_key=f"ws_error:{type(e).__name__}",
+                    "🛑 키움 WS 자동 재시도 중단\n"
+                    f"인증 실패 {self.auth_failure_count}회 누적 — 키 재등록이 필요합니다.\n"
+                    "설정 → 키움 키에서 새 키를 저장하면 자동으로 재시작됩니다.",
+                    dedup_key=f"ws_login_giveup:{self.user_id}:{today}",
+                    dedup_ttl=DEDUP_TTL_24H,
                 )
-                await asyncio.sleep(5)
+                return
+
+            # 백오프 산정 — 인증 실패는 누적 카운터 기반 사다리, 일반 오류는 5초 고정.
+            if is_auth_failure:
+                idx = min(self.auth_failure_count - 1, len(_AUTH_FAIL_BACKOFF_LADDER) - 1)
+                delay = _AUTH_FAIL_BACKOFF_LADDER[idx]
+                print(
+                    f"[kiwoom_ws user={self.user_id}] LOGIN 인증 실패 "
+                    f"({self.auth_failure_count}/{_AUTH_FAILURE_HARD_STOP_THRESHOLD}) "
+                    f"— {delay}초 후 재시도: {err_msg}"
+                )
+                notify_user_fire(
+                    self.user_id,
+                    "⚠️ 키움 실시간 인증 실패\n"
+                    f"{err_msg}\n"
+                    f"누적 {self.auth_failure_count}회 — {delay}초 후 재시도합니다.\n"
+                    "재시도가 계속 실패하면 키 재등록이 필요할 수 있습니다.\n"
+                    "(설정 → 키움 키)",
+                    dedup_key=f"ws_login_failed:{self.user_id}:{today}",
+                    dedup_ttl=DEDUP_TTL_24H,
+                )
+            else:
+                delay = _RECONNECT_BACKOFF_LADDER[0]
+                print(f"[kiwoom_ws user={self.user_id}] 연결 오류 — {delay}초 후 재연결: {err_msg}")
+                notify_user_fire(
+                    self.user_id,
+                    f"⚠️ 키움 실시간 연결 오류\n{err_msg}\n{delay}초 후 재연결 시도합니다.",
+                    dedup_key=f"ws_error:{self.user_id}:{today}",
+                    dedup_ttl=DEDUP_TTL_24H,
+                )
+
+            try:
+                await asyncio.sleep(delay)
+            except asyncio.CancelledError:
+                break
+
+    async def _login_once(self, ws) -> None:
+        """현재 캐시 토큰으로 LOGIN 1회 시도. 응답 OK 까지 대기.
+        return_code != 0 이면 _AuthFailure 던짐 — 호출부에서 토큰 무효화 후 재시도하거나
+        그대로 _connect_loop 까지 전파해 백오프/카운터 누적."""
+        token = await self.client.get_token()
+        await self._send({"trnm": "LOGIN", "token": token})
+        while True:
+            raw = await ws.recv()
+            try:
+                msg = json.loads(raw)
+            except Exception:
+                continue
+            if msg.get("trnm") != "LOGIN":
+                continue
+            rc = msg.get("return_code", 0)
+            if rc != 0:
+                raise _AuthFailure(
+                    f"키움 WS 로그인 실패: rc={rc} {msg.get('return_msg')}"
+                )
+            return
 
     async def _run(self) -> None:
         self.authenticated = False
@@ -124,7 +234,6 @@ class UserKiwoomWS:
             fut = getattr(self, fut_attr, None)
             if fut is not None and not fut.done():
                 fut.set_exception(RuntimeError("키움 WS 재연결로 요청 취소됨"))
-        token = await self.client.get_token()
         async with websockets.connect(
             self.client.ws_url,
             ping_interval=20,
@@ -135,22 +244,20 @@ class UserKiwoomWS:
 
             # 1) 로그인 전문 — 키움 WS 는 접속 직후 LOGIN 으로 인증해야 REG 가능.
             #    authorization 헤더가 아니라 body 의 token 필드로 인증한다.
-            await self._send({"trnm": "LOGIN", "token": token})
-            while True:
-                raw = await ws.recv()
-                try:
-                    msg = json.loads(raw)
-                except Exception:
-                    continue
-                if msg.get("trnm") != "LOGIN":
-                    continue
-                if msg.get("return_code", 0) != 0:
-                    raise RuntimeError(
-                        f"키움 WS 로그인 실패: {msg.get('return_msg')}"
-                    )
-                break
+            #    1차 실패 시 stale 캐시 가능성 → 토큰 무효화 후 1회 재시도.
+            try:
+                await self._login_once(ws)
+            except _AuthFailure as e:
+                print(
+                    f"[kiwoom_ws user={self.user_id}] LOGIN 실패 — "
+                    f"토큰 캐시 무효화 후 재시도: {e}"
+                )
+                await self.client.invalidate_token()
+                await self._login_once(ws)   # 2차 실패면 _AuthFailure 그대로 전파
             self.authenticated = True
             self.last_connected_at = datetime.utcnow()
+            self.auth_failure_count = 0
+            self.last_auth_error = None
             print(f"[kiwoom_ws user={self.user_id}] 로그인 성공")
 
             # 2) 주문체결(00) + 잔고(04) — 토큰 귀속, item 불필요

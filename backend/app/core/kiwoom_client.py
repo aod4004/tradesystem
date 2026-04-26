@@ -164,6 +164,22 @@ class KiwoomClient:
         await redis.setex(cache_key, ttl, token)
         return token
 
+    async def invalidate_token(self) -> None:
+        """현재 app_key 의 Redis 토큰 캐시를 즉시 삭제.
+
+        LOGIN 8005 등 토큰 무효 신호를 받았을 때 호출. 다음 get_token() 에서
+        /oauth2/token 으로 새 토큰을 받게 된다. app_key 별 캐시이므로 다른
+        유저 영향 없음 (admin 키가 시스템 env 키와 동일하면 시스템 호출도
+        다음 1회만 재발급 비용 — 정상 발급 가능 상태라면 무시 가능).
+        """
+        if not self._app_key:
+            return
+        try:
+            redis = await self._get_redis()
+            await redis.delete(self._token_cache_key())
+        except Exception as e:
+            print(f"[kiwoom_client] invalidate_token 실패 (무시): {e}")
+
     async def _issue_token(self) -> tuple[str, str]:
         url = f"{self.base_url}/oauth2/token"
         body = {
@@ -413,13 +429,19 @@ _user_clients: dict[int, KiwoomClient] = {}
 def get_or_create_user_client(user_id: int, cfg: "UserTradingConfig") -> KiwoomClient:
     """cfg 의 현재 키로 유효한 KiwoomClient 반환. 키가 바뀌었으면 교체."""
     app_key = cfg.kiwoom_app_key or ""
+    secret_key = cfg.kiwoom_secret_key or ""
     existing = _user_clients.get(user_id)
-    if existing is not None and existing._app_key == app_key and existing._mock == cfg.kiwoom_mock:
+    if (
+        existing is not None
+        and existing._app_key == app_key
+        and existing._secret_key == secret_key
+        and existing._mock == cfg.kiwoom_mock
+    ):
         return existing
     # 키 변경 — 기존 클라이언트를 정리 후 새로 생성.
     # close 는 async 라 여기선 등록만 해두고 호출부에서 invalidate_user_client 를 거치는 게 이상적이나,
     # 호출 편의를 위해 동기로 덮어씌우고 이전 인스턴스는 GC 에 맡김 (httpx 는 __del__ 에서 정리됨).
-    new_client = KiwoomClient(app_key=app_key, secret_key=cfg.kiwoom_secret_key or "", mock=cfg.kiwoom_mock)
+    new_client = KiwoomClient(app_key=app_key, secret_key=secret_key, mock=cfg.kiwoom_mock)
     _user_clients[user_id] = new_client
     return new_client
 

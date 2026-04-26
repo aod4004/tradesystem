@@ -67,6 +67,7 @@ export interface KiwoomKeysStatus {
   has_keys: boolean
   mock: boolean
   total_investment: number
+  ws_permanently_stopped?: boolean
 }
 
 export const fetchKiwoomStatus = () =>

@@ -259,6 +259,16 @@ export default function Settings() {
             모의투자와 실전투자 계정의 키는 서로 다릅니다.
           </p>
 
+          {status?.ws_permanently_stopped && (
+            <div className="mb-4 rounded-lg border border-red-500/40 bg-red-900/30 px-4 py-3 text-sm text-red-200">
+              <div className="font-semibold mb-1">🛑 키움 실시간 연결이 자동 재시도를 중단했습니다</div>
+              <div className="text-red-300/90">
+                연속된 인증 실패로 WebSocket 루프가 영구 정지된 상태입니다.
+                아래에서 키를 다시 저장하면 자동으로 재시작됩니다.
+              </div>
+            </div>
+          )}
+
           <form onSubmit={onSave} className="space-y-3">
             <label className="block">
               <span className="text-sm text-gray-400">App Key</span>

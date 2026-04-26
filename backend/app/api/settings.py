@@ -30,6 +30,14 @@ class KiwoomKeysStatus(BaseModel):
     has_keys: bool
     mock: bool
     total_investment: float
+    # 유저 WS 가 인증 실패 누적으로 영구 정지된 상태 — 프런트 배너 게이트.
+    # 키 PUT 재저장 시 새 인스턴스로 자동 재시작되어 false 로 돌아감.
+    ws_permanently_stopped: bool = False
+
+
+def _ws_permanently_stopped(user_id: int) -> bool:
+    conn = kiwoom_pool._connections.get(user_id)
+    return bool(conn and getattr(conn, "permanently_stopped", False))
 
 
 class KiwoomKeysPayload(BaseModel):
@@ -67,6 +75,7 @@ async def get_status(
     has = bool(cfg.kiwoom_app_key and cfg.kiwoom_secret_key)
     return KiwoomKeysStatus(
         has_keys=has, mock=cfg.kiwoom_mock, total_investment=cfg.total_investment,
+        ws_permanently_stopped=_ws_permanently_stopped(user.id),
     )
 
 
@@ -109,6 +118,7 @@ async def update_keys(
 
     return KiwoomKeysStatus(
         has_keys=True, mock=cfg.kiwoom_mock, total_investment=cfg.total_investment,
+        ws_permanently_stopped=_ws_permanently_stopped(user.id),
     )
 
 
@@ -135,6 +145,7 @@ async def delete_keys(
         has_keys=False,
         mock=cfg.kiwoom_mock if cfg else True,
         total_investment=cfg.total_investment if cfg else 0.0,
+        ws_permanently_stopped=_ws_permanently_stopped(user.id),
     )
 
 

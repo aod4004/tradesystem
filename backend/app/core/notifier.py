@@ -77,14 +77,20 @@ class KakaoNotifier:
             self._redis = None
         return self._redis
 
-    async def _should_send(self, user_id: int, dedup_key: str | None) -> bool:
+    async def _should_send(
+        self,
+        user_id: int,
+        dedup_key: str | None,
+        ttl: int | None = None,
+    ) -> bool:
         if not dedup_key:
             return True
         key = f"notify:dedup:u{user_id}:{dedup_key}"
+        eff_ttl = ttl if (ttl is not None and ttl > 0) else _DEDUP_TTL_SECONDS
         redis = await self._get_redis()
         if redis is not None:
             try:
-                was_set = await redis.set(key, "1", ex=_DEDUP_TTL_SECONDS, nx=True)
+                was_set = await redis.set(key, "1", ex=eff_ttl, nx=True)
                 return bool(was_set)
             except Exception:
                 pass
@@ -92,7 +98,7 @@ class KakaoNotifier:
         _prune_in_memory(now)
         if key in _IN_MEMORY_DEDUP:
             return False
-        _IN_MEMORY_DEDUP[key] = now + _DEDUP_TTL_SECONDS
+        _IN_MEMORY_DEDUP[key] = now + eff_ttl
         return True
 
     # ------------------------------------------------------------------ #
@@ -272,12 +278,17 @@ class KakaoNotifier:
         text: str,
         *,
         dedup_key: str | None = None,
+        dedup_ttl: int | None = None,
         link_url: str | None = None,
     ) -> None:
-        """유저에게 알림 전송 (조건부)."""
+        """유저에게 알림 전송 (조건부).
+
+        dedup_ttl: dedup 키 TTL(초). None 이면 기본 60초. WS 알림처럼 24시간 1회로
+        제한해야 하는 케이스에서 86400 등 명시.
+        """
         if not settings.KAKAO_REST_API_KEY:
             return
-        if not await self._should_send(user_id, dedup_key):
+        if not await self._should_send(user_id, dedup_key, ttl=dedup_ttl):
             return
         access = await self._get_valid_access_token(user_id)
         if not access:
@@ -286,7 +297,9 @@ class KakaoNotifier:
         if not ok:
             print(f"[notifier] user={user_id} 카카오 전송 실패: {reason}")
 
-    async def send_to_admins(self, text: str, *, dedup_key: str | None = None) -> None:
+    async def send_to_admins(
+        self, text: str, *, dedup_key: str | None = None, dedup_ttl: int | None = None,
+    ) -> None:
         """관리자 전체에게 전송 (스케줄러·WS 오류 등)."""
         if not settings.KAKAO_REST_API_KEY:
             return
@@ -303,7 +316,7 @@ class KakaoNotifier:
                 )
             ).all()
         for (uid,) in rows:
-            await self.send(uid, text, dedup_key=dedup_key)
+            await self.send(uid, text, dedup_key=dedup_key, dedup_ttl=dedup_ttl)
 
     async def send_test(self, user_id: int) -> tuple[bool, str]:
         """연결 테스트 — 저장된 토큰으로 실제 전송 시도."""
@@ -367,9 +380,13 @@ def _fire_and_forget(coro) -> None:
         loop.create_task(coro)
 
 
-def notify_user_fire(user_id: int, text: str, *, dedup_key: str | None = None) -> None:
-    _fire_and_forget(notifier.send(user_id, text, dedup_key=dedup_key))
+def notify_user_fire(
+    user_id: int, text: str, *, dedup_key: str | None = None, dedup_ttl: int | None = None,
+) -> None:
+    _fire_and_forget(notifier.send(user_id, text, dedup_key=dedup_key, dedup_ttl=dedup_ttl))
 
 
-def notify_admins_fire(text: str, *, dedup_key: str | None = None) -> None:
-    _fire_and_forget(notifier.send_to_admins(text, dedup_key=dedup_key))
+def notify_admins_fire(
+    text: str, *, dedup_key: str | None = None, dedup_ttl: int | None = None,
+) -> None:
+    _fire_and_forget(notifier.send_to_admins(text, dedup_key=dedup_key, dedup_ttl=dedup_ttl))

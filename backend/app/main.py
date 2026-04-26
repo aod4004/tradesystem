@@ -169,11 +169,15 @@ async def health():
             "last_connected_at": _iso(getattr(c, "last_connected_at", None)),
             "pending_cnsrreq": bool(getattr(c, "_pending_cnsrreq", None) is not None),
             "pending_cnsrlst": bool(getattr(c, "_pending_cnsrlst", None) is not None),
+            "auth_failure_count": int(getattr(c, "auth_failure_count", 0) or 0),
+            "last_auth_error": getattr(c, "last_auth_error", None),
+            "permanently_stopped": bool(getattr(c, "permanently_stopped", False)),
         }
         for c in conns
     ]
+    any_stopped = any(getattr(c, "permanently_stopped", False) for c in conns)
     components["kiwoom_ws_pool"] = {
-        "ok": len(authed_users) == len(conns),
+        "ok": len(authed_users) == len(conns) and not any_stopped,
         "connections": len(conns),
         "authenticated": len(authed_users),
         "users": sorted(kiwoom_pool._connections.keys()),
