@@ -77,7 +77,7 @@ export default function PortfolioTable() {
         <table className="w-full text-sm text-gray-300">
           <thead>
             <tr className="text-gray-400 border-b border-gray-700">
-              {['종목명', '수량', '평균매입가', '현재가', '평가손익', '수익률', '매수차수', '매도차수', '다음매도조건'].map(h => (
+              {['종목명', '수량', '평균매입가', '현재가', '평가금액', '평가손익', '수익률', '매수차수', '매도차수', '다음매도조건'].map(h => (
                 <th key={h} className="py-2 px-2 text-right first:text-left">{h}</th>
               ))}
             </tr>
@@ -85,6 +85,7 @@ export default function PortfolioTable() {
           <tbody>
             {positions.map(p => {
               const cp = prices[p.stock_code] ?? 0
+              const evalAmount = cp > 0 ? cp * p.quantity : 0
               const pnl = cp > 0 ? (cp - p.avg_buy_price) * p.quantity : 0
               const pnlRate = cp > 0 ? (cp - p.avg_buy_price) / p.avg_buy_price * 100 : 0
               const nextSell = p.sell_rounds_done < 5 ? SELL_LABELS[p.sell_rounds_done] : '완료'
@@ -97,6 +98,7 @@ export default function PortfolioTable() {
                   <td className="py-2 px-2 text-right">{p.quantity.toLocaleString()}</td>
                   <td className="py-2 px-2 text-right">{Math.round(p.avg_buy_price).toLocaleString()}</td>
                   <td className="py-2 px-2 text-right">{cp > 0 ? cp.toLocaleString() : '-'}</td>
+                  <td className="py-2 px-2 text-right">{cp > 0 ? Math.round(evalAmount).toLocaleString() : '-'}</td>
                   <td className={`py-2 px-2 text-right font-bold ${pnl >= 0 ? 'text-red-400' : 'text-blue-400'}`}>
                     {cp > 0 ? `${pnl >= 0 ? '+' : ''}${Math.round(pnl).toLocaleString()}` : '-'}
                   </td>
@@ -114,7 +116,7 @@ export default function PortfolioTable() {
               )
             })}
             {positions.length === 0 && (
-              <tr><td colSpan={9} className="text-center py-6 text-gray-500">보유 종목 없음</td></tr>
+              <tr><td colSpan={10} className="text-center py-6 text-gray-500">보유 종목 없음</td></tr>
             )}
           </tbody>
         </table>

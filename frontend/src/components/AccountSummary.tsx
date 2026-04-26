@@ -38,6 +38,7 @@ export default function AccountSummary() {
   const cards = [
     { label: '총 투자금', value: data?.total_investment, color: 'text-gray-200' },
     { label: '총 자산', value: data?.total_asset, color: 'text-blue-400' },
+    { label: '총 보유 주식 가치', value: data?.total_eval_amount, color: 'text-purple-300' },
     { label: '예수금', value: data?.deposit, color: 'text-yellow-400' },
     {
       label: '수익률',
@@ -48,7 +49,7 @@ export default function AccountSummary() {
   ]
 
   return (
-    <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+    <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6">
       {cards.map(c => (
         <div key={c.label} className="bg-gray-800 rounded-xl p-4">
           <p className="text-gray-400 text-sm mb-1">{c.label}</p>
