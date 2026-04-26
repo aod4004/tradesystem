@@ -485,11 +485,33 @@ class UserKiwoomWS:
         if not order_no:
             return
         if state == "체결":
-            await self._apply_fill(order_no, filled_price, filled_qty)
+            # 외부 거래(영웅문 등) 인 경우 _apply_fill 안에서 새 Order 를 만들어야 하므로
+            # 매도수구분(907)/종목/주문수량(900)/주문가격(901) 등 메타를 함께 전달.
+            raw_code = (values.get("9001") or "").strip()
+            stock_code = raw_code[1:] if raw_code.startswith("A") else raw_code
+            await self._apply_fill(
+                order_no, filled_price, filled_qty,
+                sell_buy_flag=(values.get("907") or "").strip(),
+                stock_code=stock_code,
+                stock_name=(values.get("302") or "").strip(),
+                order_qty=to_int(values.get("900")),
+                order_price=abs(to_int(values.get("901"))),
+            )
         elif state in ("취소", "거부"):
             await self._apply_cancel(order_no, state)
 
-    async def _apply_fill(self, order_no: str, price: int, qty: int) -> None:
+    async def _apply_fill(
+        self,
+        order_no: str,
+        price: int,
+        qty: int,
+        *,
+        sell_buy_flag: str = "",
+        stock_code: str = "",
+        stock_name: str = "",
+        order_qty: int = 0,
+        order_price: int = 0,
+    ) -> None:
         if qty <= 0:
             return
         async with AsyncSessionLocal() as db:
@@ -502,7 +524,31 @@ class UserKiwoomWS:
                 )
             ).scalar_one_or_none()
             if not order:
-                return
+                # 외부 거래 — 시스템이 만들지 않은 주문(영웅문/모바일 키움앱 등)의 체결.
+                # 시스템 DB 와 키움 잔고가 어긋나면 자동 매도 시 800033(매도가능수량부족) 등
+                # 발생하므로 외부 거래도 Order 로 등록 + Position 동기화 한다.
+                # order_round=-1 은 외부 거래 마커 (자동 매수 1~5, 추가매수 0 과 충돌 없음).
+                if not stock_code or sell_buy_flag not in ("1", "2"):
+                    return  # 메타 부족 — 안전상 무시
+                order_type = OrderType.BUY if sell_buy_flag == "2" else OrderType.SELL
+                order = Order(
+                    user_id=self.user_id,
+                    stock_code=stock_code,
+                    stock_name=stock_name or stock_code,
+                    order_type=order_type,
+                    order_round=-1,
+                    order_price=order_price or price,
+                    order_qty=order_qty or qty,
+                    filled_qty=0,
+                    kiwoom_order_no=order_no,
+                    status=OrderStatus.SUBMITTED,
+                )
+                db.add(order)
+                await db.flush()
+                print(
+                    f"[kiwoom_ws user={self.user_id}] 외부 거래 등록 — "
+                    f"{order_type.value} {stock_code} {qty}주 @{price:,}원 ord_no={order_no}"
+                )
 
             order.filled_price = price
             order.filled_qty += qty

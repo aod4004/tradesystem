@@ -176,23 +176,32 @@ export default function OrderList() {
                       {g.date} <span className="text-gray-500">({g.orders.length}건)</span>
                     </td>
                   </tr>
-                  {g.orders.map(o => (
-                    <tr key={o.id} className="border-b border-gray-700">
-                      <td className="py-1 px-2">
-                        <span className="font-medium text-white">{o.stock_name || o.stock_code}</span>
-                        <span className="ml-1 text-xs text-gray-500">{o.stock_code}</span>
-                      </td>
-                      <td className={`py-1 px-2 text-right font-bold ${o.order_type === 'buy' ? 'text-red-400' : 'text-blue-400'}`}>
-                        {o.order_type === 'buy' ? '매수' : '매도'}
-                      </td>
-                      <td className="py-1 px-2 text-right">{o.order_round}차</td>
-                      <td className="py-1 px-2 text-right">{o.order_price.toLocaleString()}</td>
-                      <td className="py-1 px-2 text-right">{o.order_qty}</td>
-                      <td className={`py-1 px-2 text-right ${STATUS_COLORS[o.status] ?? ''}`}>
-                        {STATUS_LABELS[o.status] ?? o.status}
-                      </td>
-                    </tr>
-                  ))}
+                  {g.orders.map(o => {
+                    const isExternal = o.order_round === -1
+                    const isExtraBuy = o.order_round === 0 && o.order_type === 'buy'
+                    return (
+                      <tr key={o.id} className="border-b border-gray-700">
+                        <td className="py-1 px-2">
+                          <span className="font-medium text-white">{o.stock_name || o.stock_code}</span>
+                          <span className="ml-1 text-xs text-gray-500">{o.stock_code}</span>
+                          {isExternal && (
+                            <span className="ml-1 text-[10px] px-1 py-0.5 rounded bg-purple-900 text-purple-200">외부</span>
+                          )}
+                        </td>
+                        <td className={`py-1 px-2 text-right font-bold ${o.order_type === 'buy' ? 'text-red-400' : 'text-blue-400'}`}>
+                          {o.order_type === 'buy' ? '매수' : '매도'}
+                        </td>
+                        <td className="py-1 px-2 text-right">
+                          {isExternal ? '—' : isExtraBuy ? '추가' : `${o.order_round}차`}
+                        </td>
+                        <td className="py-1 px-2 text-right">{o.order_price.toLocaleString()}</td>
+                        <td className="py-1 px-2 text-right">{o.order_qty}</td>
+                        <td className={`py-1 px-2 text-right ${STATUS_COLORS[o.status] ?? ''}`}>
+                          {STATUS_LABELS[o.status] ?? o.status}
+                        </td>
+                      </tr>
+                    )
+                  })}
                 </Fragment>
               ))}
               {orders.length === 0 && (
