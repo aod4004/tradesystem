@@ -1,7 +1,7 @@
 import { useState, useCallback } from 'react'
 import { useQuery, useQueryClient, useMutation } from '@tanstack/react-query'
-import { fetchPositions, reconcilePositions } from '../api/client'
-import { Position, WsMessage } from '../types'
+import { fetchBalance, fetchPositions, reconcilePositions } from '../api/client'
+import { AccountBalance, Position, WsMessage } from '../types'
 import { useRealtimeWs } from '../hooks/useRealtimeWs'
 import { useAuth } from '../context/AuthContext'
 
@@ -14,7 +14,20 @@ export default function PortfolioTable() {
     refetchInterval: 5000,
   })
 
-  // 실시간 가격 상태
+  // 잔고 응답의 holdings — WS 0B 시세가 안 들어올 때 (예: 모의투자) current_price fallback.
+  // AccountSummary 와 같은 ['balance'] 캐시 공유.
+  const { data: balance } = useQuery<AccountBalance, any>({
+    queryKey: ['balance'],
+    queryFn: fetchBalance,
+    refetchInterval: 5000,
+    retry: (count, err) => err?.response?.status === 409 ? false : count < 2,
+  })
+  const balanceByCode: Record<string, number> = {}
+  for (const h of balance?.holdings ?? []) {
+    if (h.code && h.current_price > 0) balanceByCode[h.code] = h.current_price
+  }
+
+  // 실시간 가격 상태 (WS 0B). 비어있으면 balanceByCode 가 fallback.
   const [prices, setPrices] = useState<Record<string, number>>({})
 
   // 잔고 → DB positions 동기화 — WS 체결 이벤트를 놓친 과거 보유 종목 복구용.
@@ -84,7 +97,8 @@ export default function PortfolioTable() {
           </thead>
           <tbody>
             {positions.map(p => {
-              const cp = prices[p.stock_code] ?? 0
+              // 우선순위: WS 실시간 0B → 잔고 폴링 (모의투자에서 0B 미수신 대비)
+              const cp = prices[p.stock_code] || balanceByCode[p.stock_code] || 0
               const evalAmount = cp > 0 ? cp * p.quantity : 0
               const pnl = cp > 0 ? (cp - p.avg_buy_price) * p.quantity : 0
               const pnlRate = cp > 0 ? (cp - p.avg_buy_price) / p.avg_buy_price * 100 : 0

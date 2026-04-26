@@ -45,13 +45,14 @@ async def get_balance(
             detail=f"키움 API 오류: {e}",
         )
 
+    # 키움 가격 필드는 전일대비 방향을 +/- 부호로 포함 — abs() 적용 (ka10001 와 동일 패턴).
     holdings = [
         {
             "code": _strip_code_prefix(h.get("stk_cd", "")),
             "name": h.get("stk_nm", ""),
             "quantity": to_int(h.get("rmnd_qty")),
             "avg_price": to_int(h.get("pur_pric")),
-            "current_price": to_int(h.get("cur_prc")),
+            "current_price": abs(to_int(h.get("cur_prc"))),
             "eval_profit_loss": to_int(h.get("evltv_prft")),
             "profit_rate": to_float(h.get("prft_rt")),
         }
@@ -61,7 +62,10 @@ async def get_balance(
     total_eval = to_int(bal.get("tot_evlt_amt"))
     deposit = to_int(dep.get("entr"))
     order_available = to_int(dep.get("ord_alow_amt"))
-    total_asset = to_int(bal.get("prsm_dpst_aset_amt")) or (total_eval + deposit)
+    # 총 자산 = 보유 주식 평가금액 + 예수금 (사용자 멘탈 모델 일관성).
+    # 키움 prsm_dpst_aset_amt 는 대용금/신용/발행어음 등도 포함해 사용자가 본 두 값의 단순
+    # 합과 어긋날 수 있어 명시적으로 단순 합 사용.
+    total_asset = total_eval + deposit
     total_invest = await get_total_investment(db, user.id)
     profit_rate = (
         (total_asset - total_invest) / total_invest * 100
