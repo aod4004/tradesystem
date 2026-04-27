@@ -2,7 +2,9 @@
 스케줄러 — APScheduler 기반 자동 작업
 
 스케줄:
-  08:30  보유 종목 MA 캐시 갱신 (전일 종가 포함 — 장중 MA 터치 매도 즉시 평가)
+  08:00  키움 잔고 ↔ DB Position 동기화 (외부 거래/모의투자 잔고 어긋남 보정)
+  08:30  보유 종목 MA 캐시 갱신
+  08:35  사전 매도 주문 정비 (조건별 지정가 매도 주문을 호가창에 미리 등록)
   08:50  장 시작 전 매수 주문 자동 전송 (유저별 루프, 각 유저 키움 키 사용)
   15:40  장 마감 후 종목 스크리닝(글로벌, 시스템 키) + 유저별 매수 신호 감지(유저 키)
 """
@@ -22,6 +24,8 @@ from app.strategy.signal import detect_buy_signals
 from app.strategy.executor import execute_pending_buy_orders
 from app.strategy.approval import summarize_pending_signals
 from app.strategy.ma20 import refresh_ma20_for_active_positions
+from app.strategy.balance_sync import sync_user_balance
+from app.strategy.sell_planner import plan_sell_orders_all
 
 
 async def job_screening():
@@ -160,13 +164,75 @@ async def job_refresh_ma20():
         )
 
 
+async def job_balance_sync():
+    """매일 08:00 — 키움 잔고를 truth 로 DB Position 동기화.
+    외부 거래(영웅문 등)/모의투자 잔고 어긋남으로 인한 800033(매도가능수량 부족)
+    폭격을 차단하기 위한 사전 단계.
+    """
+    print("[scheduler] 잔고 동기화 시작")
+    async with AsyncSessionLocal() as db:
+        users = await list_trading_users(db)
+        for u in users:
+            cfg = await get_trading_config(db, u.id)
+            if cfg is None or not cfg.kiwoom_app_key or not cfg.kiwoom_secret_key:
+                continue
+            client = get_or_create_user_client(u.id, cfg)
+            try:
+                result = await sync_user_balance(db, u.id, client)
+                print(f"[scheduler] user={u.id} balance_sync: {result}")
+            except Exception as e:
+                print(f"[scheduler] user={u.id} balance_sync 실패: {type(e).__name__}: {e}")
+                notify_user_fire(
+                    u.id,
+                    f"⚠️ 잔고 동기화 실패\n{type(e).__name__}: {e}",
+                    dedup_key=f"balance_sync_error:{u.id}",
+                )
+
+
+async def job_plan_sell_orders():
+    """매일 08:35 (MA 캐시 직후) — 사전 매도 주문 정비.
+    각 active Position 의 사전 매도 주문을 모두 취소 후, 새 평단/MA 기준으로
+    가격 오름차순 최대 5개 트랜치로 재등록.
+    """
+    print("[scheduler] 사전 매도 주문 정비 시작")
+    async with AsyncSessionLocal() as db:
+        users = await list_trading_users(db)
+        for u in users:
+            cfg = await get_trading_config(db, u.id)
+            if cfg is None or not cfg.kiwoom_app_key or not cfg.kiwoom_secret_key:
+                continue
+            client = get_or_create_user_client(u.id, cfg)
+            try:
+                result = await plan_sell_orders_all(db, u.id, client)
+                print(f"[scheduler] user={u.id} sell_plan: {result}")
+            except Exception as e:
+                print(f"[scheduler] user={u.id} sell_plan 실패: {type(e).__name__}: {e}")
+                notify_user_fire(
+                    u.id,
+                    f"⚠️ 사전 매도 주문 정비 실패\n{type(e).__name__}: {e}",
+                    dedup_key=f"sell_plan_error:{u.id}",
+                )
+
+
 def create_scheduler() -> AsyncIOScheduler:
     scheduler = AsyncIOScheduler(timezone="Asia/Seoul")
 
     scheduler.add_job(
+        job_balance_sync,
+        CronTrigger(day_of_week="mon-fri", hour=8, minute=0, timezone="Asia/Seoul"),
+        id="balance_sync",
+        replace_existing=True,
+    )
+    scheduler.add_job(
         job_refresh_ma20,
         CronTrigger(day_of_week="mon-fri", hour=8, minute=30, timezone="Asia/Seoul"),
         id="refresh_ma20",
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        job_plan_sell_orders,
+        CronTrigger(day_of_week="mon-fri", hour=8, minute=35, timezone="Asia/Seoul"),
+        id="plan_sell_orders",
         replace_existing=True,
     )
     scheduler.add_job(

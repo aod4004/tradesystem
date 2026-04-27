@@ -34,8 +34,8 @@ from app.core.kiwoom_client import KiwoomClient, to_int
 from app.core.notifier import notify_admins_fire, notify_user_fire
 from app.db.database import AsyncSessionLocal
 from app.db.models import Position, Order, OrderType, PositionStatus, OrderStatus
-from app.strategy.signal import check_sell_signal, check_extra_buy_signal
-from app.strategy.executor import execute_sell_order, execute_extra_buy_order
+from app.strategy.signal import check_extra_buy_signal
+from app.strategy.executor import execute_extra_buy_order
 from app.strategy.ma20 import compute_and_cache_ma
 from app.ws.manager import manager
 
@@ -93,6 +93,10 @@ class UserKiwoomWS:
         self.auth_failure_count: int = 0
         self.last_auth_error: str | None = None
         self.permanently_stopped: bool = False
+        # 매수 체결 → 매도 주문 재등록 디바운스. position_id → pending Task.
+        # 분할 체결로 _apply_fill 이 연달아 호출되면 직전 task 를 취소하고 새 task 로 교체,
+        # 마지막 호출 후 500ms 가 지나야 실제 sell_planner 가 실행된다.
+        self._pending_sell_replan: dict[int, asyncio.Task] = {}
 
     async def start(self) -> None:
         if self._running:
@@ -415,6 +419,12 @@ class UserKiwoomWS:
         await self._check_and_execute_sell(code, current_price)
 
     async def _check_and_execute_sell(self, code: str, current_price: int) -> None:
+        """실시간 시세 tick 후처리.
+
+        매도 트리거는 사전 매도 주문 등록 모델(sell_planner)로 이동했으므로
+        여기서는 추가매수(extra_buy) 조건만 평가한다. 매도 주문은 매일 08:35
+        잡 + 매수 체결 직후 디바운스 호출에서 키움 호가창에 미리 등록된다.
+        """
         async with AsyncSessionLocal() as db:
             positions = (
                 await db.execute(
@@ -428,36 +438,7 @@ class UserKiwoomWS:
             if not positions:
                 return
 
-            ma_values = self._pool.get_ma(code)
             for position in positions:
-                decision = check_sell_signal(
-                    current_price, position.avg_buy_price,
-                    position.sell_rounds_done, position.sold_triggers, ma_values,
-                )
-                if decision:
-                    sell_round, trigger_bit = decision
-                    gain_rate = round(
-                        (current_price - position.avg_buy_price) / position.avg_buy_price * 100, 2
-                    )
-                    await manager.broadcast("sell_signal", {
-                        "user_id": self.user_id,
-                        "code": code,
-                        "sell_round": sell_round,
-                        "trigger_bit": trigger_bit,
-                        "current_price": current_price,
-                        "avg_buy_price": position.avg_buy_price,
-                        "gain_rate": gain_rate,
-                    })
-                    trigger_label = _sell_trigger_label(trigger_bit)
-                    notify_user_fire(
-                        self.user_id,
-                        f"🎯 매도 조건 도달\n{position.stock_name} ({code})\n"
-                        f"{trigger_label} · 현재가 {current_price:,}원 ({gain_rate:+.2f}%)",
-                        dedup_key=f"sell_trigger:{position.id}:{trigger_bit}",
-                    )
-                    await execute_sell_order(
-                        db, position, sell_round, trigger_bit, current_price, self.client,
-                    )
                 if check_extra_buy_signal(current_price, position):
                     await manager.broadcast("extra_buy_signal", {
                         "user_id": self.user_id,
@@ -611,15 +592,18 @@ class UserKiwoomWS:
             else:  # SELL
                 position.quantity = max(0, position.quantity - qty)
                 if order.order_round > 0 and order.status == OrderStatus.FILLED:
-                    if position.sell_rounds_done < order.order_round:
-                        position.sell_rounds_done = order.order_round
                     if order.sell_trigger_bit is not None:
                         position.sold_triggers = (
                             position.sold_triggers | (1 << order.sell_trigger_bit)
                         )
-                    if order.order_round == 3:
+                    # sell_rounds_done = popcount(sold_triggers) — 사전 매도가 호가창에
+                    # 5개 동시 등록되면 가격 도달 순서가 비순차일 수 있어, "set 된 비트 수"
+                    # 가 진실. 외부 매도(order_round=-1)는 sold_triggers 변동 없으므로 영향 없음.
+                    position.sell_rounds_done = bin(position.sold_triggers).count("1")
+                    # 3회 매도 시점의 가격을 추가매수 기준 저점으로 기록
+                    if position.sell_rounds_done == 3 and position.extra_buy_low is None:
                         position.extra_buy_low = price
-                if position.quantity <= 0 or position.sell_rounds_done >= 5:
+                if position.quantity <= 0 or position.sell_rounds_done >= settings.MAX_SELL_TRANCHES:
                     position.status = PositionStatus.CLOSED
                     position.closed_at = datetime.utcnow()
                     await self.unsubscribe_price(order.stock_code)
@@ -658,6 +642,64 @@ class UserKiwoomWS:
                 self.user_id, "\n".join(lines),
                 dedup_key=f"fill:{order_no}:{order.filled_qty}",
             )
+
+            # 매수 체결 — 평단/수량 변경됐으니 사전 매도 주문 재정비.
+            # 분할 체결로 _apply_fill 이 빠르게 여러 번 호출돼도 마지막 1회만 실행되도록
+            # debounce. position.status 가 ACTIVE 인 경우만 의미 있음.
+            if (
+                order.order_type == OrderType.BUY
+                and qty > 0
+                and position is not None
+                and position.status == PositionStatus.ACTIVE
+            ):
+                self._schedule_sell_replan(position.id)
+
+    def _schedule_sell_replan(self, position_id: int) -> None:
+        """매수 체결 후 사전 매도 주문 재정비를 500ms 디바운스 후 실행 예약.
+        직전 예약이 있으면 취소하고 새로 등록 — 분할 체결 마지막 1회만 실제 실행.
+        """
+        existing = self._pending_sell_replan.get(position_id)
+        if existing is not None and not existing.done():
+            existing.cancel()
+        self._pending_sell_replan[position_id] = asyncio.create_task(
+            self._debounced_sell_replan(position_id)
+        )
+
+    async def _debounced_sell_replan(self, position_id: int) -> None:
+        try:
+            await asyncio.sleep(0.5)
+        except asyncio.CancelledError:
+            return
+        # 순환 import 방지 — 런타임 import
+        from app.strategy.sell_planner import plan_sell_orders_for_position
+
+        async with AsyncSessionLocal() as db:
+            position = (
+                await db.execute(select(Position).where(Position.id == position_id))
+            ).scalar_one_or_none()
+            if position is None or position.status != PositionStatus.ACTIVE:
+                return
+            ma_values = self._pool.get_ma(position.stock_code)
+            try:
+                result = await plan_sell_orders_for_position(
+                    db, position, self.client, ma_values,
+                )
+                print(
+                    f"[kiwoom_ws user={self.user_id}] 매수 체결 후 매도 재정비 "
+                    f"pos={position_id} ({position.stock_code}): {result}"
+                )
+            except Exception as e:
+                print(
+                    f"[kiwoom_ws user={self.user_id}] 매수 체결 후 매도 재정비 실패 "
+                    f"pos={position_id}: {type(e).__name__}: {e}"
+                )
+                notify_user_fire(
+                    self.user_id,
+                    f"❌ 매수 체결 후 매도 주문 재등록 실패\n"
+                    f"{position.stock_name} ({position.stock_code})\n"
+                    f"사유: {type(e).__name__}: {e}",
+                    dedup_key=f"sell_replan_fail:{position_id}",
+                )
 
     async def _apply_cancel(self, order_no: str, state: str) -> None:
         async with AsyncSessionLocal() as db:
