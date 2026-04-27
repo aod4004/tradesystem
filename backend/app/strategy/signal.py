@@ -132,14 +132,17 @@ async def _check_buy_signal(
 ) -> tuple[BuySignal | None, str]:
     """반환: (신호 or None, reason).
 
-    reason 값 — accepted / no_candles / invalid_ohlc / not_bullish /
-                 max_rounds / duplicate_today / above_trigger
+    reason 값:
+      accepted / no_candles / invalid_ohlc / not_bullish /
+      volume_history_short / volume_low /
+      no_5day_history / invalid_prior_ohlc / no_5day_decline /
+      max_rounds / duplicate_today / above_trigger
     """
     candles = await client.get_daily_chart(cand.code)
     if len(candles) < 2:
         return None, "no_candles"
 
-    # 최신 봉 = candles[0] (당일 종가)
+    # 최신 봉 = candles[0] (신호 발생일 = 다음날 매수 기준 "전일")
     today = candles[0]
     today_open = to_int(today.get("open_pric"))
     today_close = to_int(today.get("cur_prc"))
@@ -180,6 +183,39 @@ async def _check_buy_signal(
 
     if cand.current_price >= trigger_price:
         return None, "above_trigger"
+
+    # ------------------------------------------------------------------ #
+    #  1차 매수 전용 추가 필터 — 거래량 폭증 + 직전 N일 음봉 후 반전 양봉.
+    #  추가매수(2~5차)는 "전 차수 매입가의 90% 이하" 라는 강한 가격 필터가 이미
+    #  걸려있어 거래량/캔들 패턴까지 요구하면 거의 발동 안 함 → 1차에만 적용.
+    # ------------------------------------------------------------------ #
+    if next_round == 1:
+        # 거래량 폭증 — 신호 발생일 거래량이 직전 N거래일 평균의 N배 이상
+        today_volume = to_int(today.get("trde_qty"))
+        prior_volumes = [
+            to_int(c.get("trde_qty"))
+            for c in candles[1:1 + settings.VOLUME_AVG_DAYS]
+        ]
+        prior_volumes = [v for v in prior_volumes if v > 0]
+        # 절반 이상 데이터 있어야 통계 의미. 상장 직후 등 부족 시 스킵.
+        if len(prior_volumes) < settings.VOLUME_AVG_DAYS // 2:
+            return None, "volume_history_short"
+        avg_volume = sum(prior_volumes) / len(prior_volumes)
+        if avg_volume <= 0 or today_volume < avg_volume * settings.VOLUME_SURGE_RATIO:
+            return None, "volume_low"
+
+        # 직전 N일 모두 음봉 — 도지(c_open == c_close)도 음봉 아님으로 처리
+        decline_days = settings.INITIAL_BUY_DECLINE_DAYS
+        if len(candles) < 1 + decline_days:
+            return None, "no_5day_history"
+        for i in range(1, 1 + decline_days):
+            c = candles[i]
+            c_open = to_int(c.get("open_pric"))
+            c_close = to_int(c.get("cur_prc"))
+            if c_open <= 0 or c_close <= 0:
+                return None, "invalid_prior_ohlc"
+            if c_close >= c_open:
+                return None, "no_5day_decline"
 
     sig = BuySignal(
         user_id=user_id,

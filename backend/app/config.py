@@ -42,6 +42,13 @@ class Settings(BaseSettings):
     EXTRA_BUY_MIN_SELL_ROUNDS: int = 3       # 3회 이상 매도 후
     EXTRA_BUY_DROP_THRESHOLD: float = 0.90  # 저점의 90% 이하
 
+    # 매수 신호 강화 (signal.py)
+    # 거래량 폭증 — 신호 발생일 거래량이 직전 N일 평균의 N배 이상이어야 함
+    VOLUME_AVG_DAYS: int = 60                # 3달 ≈ 60거래일
+    VOLUME_SURGE_RATIO: float = 4.0          # 300% 증가 = 평균의 4배
+    # 1차 매수 — 직전 N일이 모두 음봉(종가<시가)이어야 양봉 전환으로 인정
+    INITIAL_BUY_DECLINE_DAYS: int = 5
+
     # Server
     SECRET_KEY: str = "change_this_to_random_secret_key"
 
