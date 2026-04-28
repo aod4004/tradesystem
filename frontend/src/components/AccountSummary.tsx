@@ -39,7 +39,7 @@ export default function AccountSummary() {
     { label: '총 투자금', value: data?.total_investment, color: 'text-gray-200' },
     { label: '총 자산', value: data?.total_asset, color: 'text-blue-400' },
     { label: '총 보유 주식 가치', value: data?.total_eval_amount, color: 'text-purple-300' },
-    { label: '예수금', value: data?.deposit, color: 'text-yellow-400' },
+    { label: '예수금 (D+2)', value: data?.deposit, color: 'text-yellow-400' },
     {
       label: '수익률',
       value: data?.profit_rate !== undefined ? `${data.profit_rate.toFixed(2)}%` : '-',

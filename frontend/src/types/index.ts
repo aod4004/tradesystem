@@ -80,7 +80,9 @@ export interface AccountBalance {
   total_purchase_amount: number
   total_profit_loss: number
   total_profit_rate: number
-  deposit: number
+  deposit: number                   // D+2 추정 (매도 미정산 포함)
+  deposit_settled: number           // 출금가능 — 키움 entr
+  deposit_d2: number                // D+2 추정 — 키움 d2_entra
   order_available: number
   profit_rate: number               // 총자산 기준
   holdings: Holding[]

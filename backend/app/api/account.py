@@ -57,9 +57,14 @@ async def get_balance(
     ]
 
     total_eval = to_int(bal.get("tot_evlt_amt"))
-    deposit = to_int(dep.get("entr"))
+    # 매도 체결 → T+2 정산 사이의 시차 보정. d2_entra (D+2 추정예수금) 가 이미
+    # 미정산 매도대금을 반영해 주므로 entr 보다 우선 사용. mock/일부 응답에서
+    # d2_entra 가 비거나 0 이면 entr 로 fallback.
+    deposit_settled = to_int(dep.get("entr"))
+    deposit_d2 = to_int(dep.get("d2_entra"))
+    deposit = max(deposit_settled, deposit_d2)
     order_available = to_int(dep.get("ord_alow_amt"))
-    # 총 자산 = 보유 주식 평가금액 + 예수금 (사용자 멘탈 모델 일관성).
+    # 총 자산 = 보유 주식 평가금액 + 예수금 (D+2 기준).
     # 키움 prsm_dpst_aset_amt 는 대용금/신용/발행어음 등도 포함해 사용자가 본 두 값의 단순
     # 합과 어긋날 수 있어 명시적으로 단순 합 사용.
     total_asset = total_eval + deposit
@@ -77,6 +82,8 @@ async def get_balance(
         "total_profit_loss": to_int(bal.get("tot_evlt_pl")),
         "total_profit_rate": to_float(bal.get("tot_prft_rt")),
         "deposit": deposit,
+        "deposit_settled": deposit_settled,
+        "deposit_d2": deposit_d2,
         "order_available": order_available,
         "profit_rate": round(profit_rate, 2),
         "holdings": holdings,
